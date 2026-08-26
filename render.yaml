@@ -3,10 +3,12 @@ services:
     name: planmate-redis
     plan: free
     maxmemoryPolicy: noeviction
+    ipAllowList:
+      - 0.0.0.0/0
 
   - type: web
     name: planmate-backend
-    runtime: python3
+    runtime: python
     rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
@@ -25,5 +27,6 @@ services:
         sync: false
       - key: REDIS_URL
         fromService:
+          type: redis
           name: planmate-redis
           property: connectionString
