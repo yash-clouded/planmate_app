@@ -1,5 +1,9 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import '../theme/app_theme.dart';
+import '../services/api_config.dart';
+import '../services/backend_service.dart';
 import 'chat_list_screen.dart';
 
 class CreateGroupScreen extends StatefulWidget {
@@ -13,6 +17,9 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
   final _nameController = TextEditingController();
   bool _autoAddAgent = true;
   final List<_MemberChip> _members = [];
+  File? _selectedImage;
+  String? _uploadedImageUrl;
+  bool _isUploading = false;
 
   @override
   void dispose() {
@@ -104,10 +111,46 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
     );
   }
 
+  Future<void> _pickAndUploadImage() async {
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 512,
+      maxHeight: 512,
+      imageQuality: 80,
+    );
+    if (picked == null) return;
+
+    setState(() {
+      _selectedImage = File(picked.path);
+      _isUploading = true;
+    });
+
+    try {
+      final result = await BackendService.instance.uploadImage(picked.path);
+      final url = result['url'] as String? ?? '';
+      setState(() {
+        _uploadedImageUrl = url.startsWith('http')
+            ? url
+            : '${ApiConfig.backendUrl}$url';
+        _isUploading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _isUploading = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Upload failed: $e')),
+        );
+      }
+    }
+  }
+
   Widget _buildPhotoButton() {
     return Center(
       child: GestureDetector(
-        onTap: () {},
+        onTap: _isUploading ? null : _pickAndUploadImage,
         child: Container(
           width: 80,
           height: 80,
@@ -120,11 +163,25 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
               style: BorderStyle.solid,
             ),
           ),
-          child: const Icon(
-            Icons.add_a_photo_outlined,
-            size: 28,
-            color: AppTheme.primary,
-          ),
+          child: _isUploading
+              ? const Padding(
+                  padding: EdgeInsets.all(20),
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : _selectedImage != null
+                  ? ClipOval(
+                      child: Image.file(
+                        _selectedImage!,
+                        width: 80,
+                        height: 80,
+                        fit: BoxFit.cover,
+                      ),
+                    )
+                  : const Icon(
+                      Icons.add_a_photo_outlined,
+                      size: 28,
+                      color: AppTheme.primary,
+                    ),
         ),
       ),
     );
@@ -348,6 +405,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
           // Add to store
           final group = GroupData(
             name: name,
+            imagePath: _uploadedImageUrl,
             memberNames: memberNames,
             autoAddAgent: _autoAddAgent,
             creatorName: 'You',

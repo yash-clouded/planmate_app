@@ -4,6 +4,7 @@ import '../widgets/chat_bubble.dart';
 import '../widgets/agent_response_card.dart';
 import '../widgets/poll_card.dart';
 import '../services/backend_service.dart';
+import '../services/offline_queue.dart';
 import 'chat_list_screen.dart';
 
 class GroupChatScreen extends StatefulWidget {
@@ -45,6 +46,30 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         ));
       }
       _loadPolls();
+      _drainOfflineQueue();
+    }
+  }
+
+  Future<void> _drainOfflineQueue() async {
+    final count = await OfflineMessageQueue.instance.drain((msg) async {
+      final channelId = msg['channel_id'] as String?;
+      if (channelId == null || _group == null) return true;
+      if (channelId != 'messaging:${_group!.name}') return true;
+      try {
+        await BackendService.instance.sendAgentCommand(
+          channelId: channelId,
+          command: msg['command'] as String? ?? 'chat',
+          text: msg['text'] as String? ?? '',
+        );
+        return true;
+      } catch (_) {
+        return false;
+      }
+    });
+    if (count > 0 && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Synced $count offline message${count != 1 ? "s" : ""}')),
+      );
     }
   }
 
@@ -205,6 +230,24 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           agentDescription: e.toString().substring(0, 200),
         ));
       });
+      // Queue for retry if it looks like a network error
+      if (e.toString().contains('SocketException') ||
+          e.toString().contains('TimeoutException') ||
+          e.toString().contains('ClientException')) {
+        await OfflineMessageQueue.instance.enqueue({
+          'channel_id': 'messaging:${_group!.name}',
+          'command': command ?? 'chat',
+          'text': userMessage,
+        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Offline — will sync when connection returns'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+      }
     }
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
