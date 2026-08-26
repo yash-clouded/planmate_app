@@ -1,0 +1,54 @@
+name: planmate
+description: "PlanMate — AI agent-powered group chat for planning trips and outings"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.9.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # Stream Chat — realtime group messaging
+  stream_chat_flutter: ^9.0.0
+
+  # Firebase
+  firebase_core: ^3.6.0
+  firebase_auth: ^5.3.0
+  firebase_messaging: ^15.1.0
+
+  # State management
+  provider: ^6.1.2
+
+  # HTTP client for backend calls
+  http: ^1.2.2
+
+  # Secure storage for tokens
+  flutter_secure_storage: ^9.2.4
+
+  # Image picker for avatars
+  image_picker: ^1.1.2
+
+  # URL launcher for payment links
+  url_launcher: ^6.3.1
+
+  # Local storage for groups and settings
+  shared_preferences: ^2.3.2
+
+  # Geolocator for trip mode
+  geolocator: ^13.0.1
+
+  # Google Maps for trip mode map view
+  google_maps_flutter: ^2.10.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true

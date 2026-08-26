@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "468657114122",
+    "project_id": "planmate-bbc4d",
+    "storage_bucket": "planmate-bbc4d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:468657114122:android:df99c29643dba30ee323f3",
+        "android_client_info": {
+          "package_name": "com.planmate.planmate"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBBpuEXeCI6TUdF2EMN8EPw0rAyptHcRbo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

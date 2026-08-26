@@ -1,0 +1,29 @@
+services:
+  - type: redis
+    name: planmate-redis
+    plan: free
+    maxmemoryPolicy: noeviction
+
+  - type: web
+    name: planmate-backend
+    runtime: python3
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: STREAM_API_KEY
+        sync: false
+      - key: STREAM_API_SECRET
+        sync: false
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: NVIDIA_BASE_URL
+        value: https://integrate.api.nvidia.com/v1
+      - key: NVIDIA_MODEL
+        value: deepseek-ai/deepseek-v4-flash-0731
+      - key: WEBHOOK_SECRET
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          name: planmate-redis
+          property: connectionString
