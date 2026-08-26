@@ -8,7 +8,7 @@ class PollCard extends StatefulWidget {
   final Duration? timeRemaining;
   final bool showResult;
   final String? resultText;
-  final VoidCallback? onVote;
+  final ValueChanged<int>? onVote;
 
   const PollCard({
     super.key,
@@ -175,7 +175,7 @@ class _PollCardState extends State<PollCard> {
                 child: InkWell(
                   onTap: () {
                     setState(() => _selectedOption = index);
-                    widget.onVote?.call();
+                    widget.onVote?.call(index);
                   },
                   borderRadius: BorderRadius.circular(12),
                   child: Container(

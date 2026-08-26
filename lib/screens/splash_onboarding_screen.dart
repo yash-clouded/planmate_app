@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../theme/app_theme.dart';
+import '../services/permission_service.dart';
 
 class SplashOnboardingScreen extends StatefulWidget {
   const SplashOnboardingScreen({super.key});
@@ -13,6 +15,7 @@ class _SplashOnboardingScreenState extends State<SplashOnboardingScreen>
   late AnimationController _controller;
   late Animation<double> _fadeAnim;
   late Animation<double> _slideAnim;
+  bool _isRequestingPermissions = false;
 
   @override
   void initState() {
@@ -34,6 +37,15 @@ class _SplashOnboardingScreenState extends State<SplashOnboardingScreen>
   void dispose() {
     _controller.dispose();
     super.dispose();
+  }
+
+  Future<void> _handleContinue() async {
+    setState(() => _isRequestingPermissions = true);
+    final permissionService = Provider.of<PermissionService>(context, listen: false);
+    await permissionService.requestAll();
+    if (mounted) {
+      Navigator.of(context).pushReplacementNamed('/auth/phone');
+    }
   }
 
   @override
@@ -265,11 +277,18 @@ class _SplashOnboardingScreenState extends State<SplashOnboardingScreen>
         width: double.infinity,
         height: 52,
         child: ElevatedButton(
-          onPressed: () {
-            Navigator.of(context).pushReplacementNamed('/auth/phone');
-          },
+          onPressed: _isRequestingPermissions ? null : _handleContinue,
           style: AppTheme.primaryButtonStyle,
-          child: const Text('Continue'),
+          child: _isRequestingPermissions
+              ? const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                  ),
+                )
+              : const Text('Continue'),
         ),
       ),
     );

@@ -123,3 +123,38 @@ async def cast_vote(
         "counts": counts,
         "total_votes": len(all_votes),
     }
+
+
+async def get_polls(channel_id: str) -> list[dict]:
+    """Get all active polls for a channel."""
+    r = await get_redis()
+    pattern = f"chat:{channel_id}:poll:*"
+    keys = []
+    cursor = 0
+    while True:
+        cursor, batch = await r.scan(cursor=cursor, match=pattern, count=100)
+        keys.extend(batch)
+        if cursor == 0:
+            break
+
+    polls = []
+    for key in keys:
+        if key.endswith(":votes"):
+            continue
+        raw = await r.hgetall(key)
+        if not raw:
+            continue
+        try:
+            options = json.loads(raw.get("options", "[]"))
+            polls.append({
+                "poll_id": key.split(":")[-1],
+                "question": raw.get("question", ""),
+                "options": options,
+                "total_votes": int(raw.get("total_votes", 0)),
+                "created_at": raw.get("created_at", ""),
+                "duration_minutes": int(raw.get("duration_minutes", 60)),
+            })
+        except Exception:
+            continue
+
+    return polls

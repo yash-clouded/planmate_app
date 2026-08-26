@@ -201,7 +201,19 @@ async def _handle_poll_command(channel_id: str, text: str) -> dict[str, Any]:
     else:
         question = text.replace("poll", "").replace("Poll", "").strip() or "What should we do?"
         options = ["Option A", "Option B", "Option C"]
-    
+
+    poll_id = f"poll-{int(datetime.now(timezone.utc).timestamp() * 1000)}"
+    try:
+        await redis_store.store_poll(
+            channel_id=channel_id,
+            poll_id=poll_id,
+            question=question,
+            options=options,
+            duration_minutes=60,
+        )
+    except Exception:
+        pass
+
     return {
         "summary": f"Poll: {question}",
         "description": "Vote now!",
@@ -216,6 +228,7 @@ async def _handle_poll_command(channel_id: str, text: str) -> dict[str, Any]:
                 "duration_minutes": 60,
             }
         }],
+        "poll_id": poll_id,
     }
 
 
@@ -330,68 +343,79 @@ async def _process_general_mention(channel_id: str, mention_text: str) -> dict[s
 
 async def _call_ai(user_message: str) -> dict[str, Any]:
     """Call NVIDIA NIM (OpenAI-compatible) API with tool definitions."""
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        response = await client.post(
-            f"{settings.nvidia_base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {settings.nvidia_api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": settings.nvidia_model,
-                "messages": [
-                    {"role": "system", "content": AGENT_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_message},
-                ],
-                "tools": TOOLS,
-                "tool_choice": "auto",
-                "temperature": 0.3,
-                "max_tokens": 1024,
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
-
-    content = data["choices"][0]["message"]
-    raw_text = content.get("content", "")
-
-    # Try to parse structured JSON from the response
     try:
-        if "```json" in raw_text:
-            json_str = raw_text.split("```json")[1].split("```")[0].strip()
-        elif "```" in raw_text:
-            json_str = raw_text.split("```")[1].split("```")[0].strip()
-        else:
-            start = raw_text.find("{")
-            end = raw_text.rfind("}") + 1
-            if start >= 0 and end > start:
-                json_str = raw_text[start:end]
-            else:
-                json_str = raw_text
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(
+                f"{settings.nvidia_base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.nvidia_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.nvidia_model,
+                    "messages": [
+                        {"role": "system", "content": AGENT_SYSTEM_PROMPT},
+                        {"role": "user", "content": user_message},
+                    ],
+                    "tools": TOOLS,
+                    "tool_choice": "auto",
+                    "temperature": 0.3,
+                    "max_tokens": 1024,
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
 
-        parsed = json.loads(json_str)
-    except (json.JSONDecodeError, IndexError):
-        parsed = {
-            "summary": raw_text[:200] if raw_text else "Let me look into that for the group.",
-            "description": "",
+        content = data["choices"][0]["message"]
+        raw_text = content.get("content", "")
+
+        # Try to parse structured JSON from the response
+        try:
+            if "```json" in raw_text:
+                json_str = raw_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in raw_text:
+                json_str = raw_text.split("```")[1].split("```")[0].strip()
+            else:
+                start = raw_text.find("{")
+                end = raw_text.rfind("}") + 1
+                if start >= 0 and end > start:
+                    json_str = raw_text[start:end]
+                else:
+                    json_str = raw_text
+
+            parsed = json.loads(json_str)
+        except (json.JSONDecodeError, IndexError):
+            parsed = {
+                "summary": raw_text[:200] if raw_text else "Let me look into that for the group.",
+                "description": "",
+                "intent": "other",
+                "needs_confirmation": False,
+                "action_type": "info_only",
+                "tool_calls": [],
+            }
+
+        # Also extract tool calls from the API response if present
+        api_tool_calls = content.get("tool_calls", [])
+        if api_tool_calls and not parsed.get("tool_calls"):
+            parsed["tool_calls"] = [
+                {
+                    "tool": tc["function"]["name"],
+                    "params": json.loads(tc["function"].get("arguments", "{}")),
+                }
+                for tc in api_tool_calls
+            ]
+
+        return parsed
+    except Exception as e:
+        logger.error(f"AI call failed: {e}")
+        return {
+            "summary": "I'm having trouble connecting right now. Try again in a moment.",
+            "description": str(e)[:200],
             "intent": "other",
             "needs_confirmation": False,
-            "action_type": "info_only",
+            "action_type": "rejected",
             "tool_calls": [],
         }
-
-    # Also extract tool calls from the API response if present
-    api_tool_calls = content.get("tool_calls", [])
-    if api_tool_calls and not parsed.get("tool_calls"):
-        parsed["tool_calls"] = [
-            {
-                "tool": tc["function"]["name"],
-                "params": json.loads(tc["function"].get("arguments", "{}")),
-            }
-            for tc in api_tool_calls
-        ]
-
-    return parsed
 
 
 async def _execute_tool(tool_name: str, params: dict) -> dict:

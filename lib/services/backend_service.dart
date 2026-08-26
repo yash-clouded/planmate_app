@@ -8,13 +8,14 @@ class BackendService {
   static final instance = BackendService._();
 
   final _base = ApiConfig.backendUrl;
+  static const _timeout = Duration(seconds: 20);
 
   /// Confirm a pending booking for a group.
   Future<Map<String, dynamic>> confirmBooking(String channelId) async {
     final resp = await http.post(
       Uri.parse('$_base/webhooks/confirm/$channelId'),
       headers: {'Content-Type': 'application/json'},
-    );
+    ).timeout(_timeout);
     if (resp.statusCode != 200) {
       throw Exception('Confirm booking failed: ${resp.body}');
     }
@@ -23,7 +24,7 @@ class BackendService {
 
   /// Fetch health status of the backend.
   Future<Map<String, dynamic>> healthCheck() async {
-    final resp = await http.get(Uri.parse('$_base/health'));
+    final resp = await http.get(Uri.parse('$_base/health')).timeout(const Duration(seconds: 15));
     return jsonDecode(resp.body);
   }
 
@@ -41,7 +42,7 @@ class BackendService {
         'poll_id': pollId,
         'option_index': optionIndex,
       }),
-    );
+    ).timeout(_timeout);
     if (resp.statusCode != 200) {
       throw Exception('Vote failed: ${resp.body}');
     }
@@ -66,7 +67,7 @@ class BackendService {
         'latitude': latitude,
         'longitude': longitude,
       }),
-    );
+    ).timeout(_timeout);
   }
 
   /// Send a direct agent command (poll, summarize, restaurants, or general chat).
@@ -76,16 +77,27 @@ class BackendService {
     required String text,
   }) async {
     final resp = await http.post(
-      Uri.parse('$_base/agent/command'),
+      Uri.parse('$_base/webhooks/agent/command'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
         'channel_id': channelId,
         'command': command,
         'text': text,
       }),
-    );
+    ).timeout(const Duration(seconds: 20));
     if (resp.statusCode != 200) {
-      throw Exception('Agent command failed: ${resp.body}');
+      throw Exception('Agent command failed: ${resp.statusCode} ${resp.body}');
+    }
+    return jsonDecode(resp.body);
+  }
+
+  /// Fetch all polls for a channel.
+  Future<Map<String, dynamic>> getPolls(String channelId) async {
+    final resp = await http.get(
+      Uri.parse('$_base/polls/$channelId'),
+    ).timeout(_timeout);
+    if (resp.statusCode != 200) {
+      throw Exception('Failed to fetch polls: ${resp.body}');
     }
     return jsonDecode(resp.body);
   }

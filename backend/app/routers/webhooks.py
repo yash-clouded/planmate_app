@@ -94,9 +94,20 @@ async def stream_webhook(
                 if action_type == "poll" and result.get("tool_calls"):
                     poll_call = result["tool_calls"][0]
                     params = poll_call.get("params", {})
+                    poll_id = result.get("poll_id") or f"poll-{msg.message_id}"
+                    try:
+                        await redis_store.store_poll(
+                            channel_id=msg.cid,
+                            poll_id=poll_id,
+                            question=params.get("question", "Group poll"),
+                            options=params.get("options", ["Yes", "No"]),
+                            duration_minutes=params.get("duration_minutes", 60),
+                        )
+                    except Exception:
+                        pass
                     await send_poll_card(
                         channel_id=msg.cid,
-                        poll_id=f"poll-{msg.message_id}",
+                        poll_id=poll_id,
                         question=params.get("question", "Group poll"),
                         options=params.get("options", ["Yes", "No"]),
                         duration_minutes=params.get("duration_minutes", 60),
@@ -193,3 +204,42 @@ async def confirm_booking_endpoint(channel_id: str):
     from app.services.agent import confirm_booking
     result = await confirm_booking(channel_id)
     return result
+
+
+@router.post("/agent/command")
+async def agent_command(request: Request):
+    """
+    Direct agent command endpoint for frontend.
+    Handles poll, summarize, restaurants, and general chat commands.
+    """
+    body = await request.json()
+    channel_id = body.get("channel_id")
+    command = body.get("command", "chat")
+    text = body.get("text", "")
+
+    if not channel_id:
+        raise HTTPException(status_code=400, detail="channel_id required")
+
+    try:
+        from app.services.agent import process_mention
+        result = await process_mention(
+            channel_id=channel_id,
+            mention_text=text,
+        )
+        return result
+    except Exception as e:
+        logger.exception(f"Agent command failed for {channel_id}")
+        raise HTTPException(status_code=500, detail=str(e)[:200])
+
+
+@router.get("/polls/{channel_id}")
+async def get_polls(channel_id: str):
+    """
+    Get all active polls for a channel.
+    """
+    try:
+        polls = await redis_store.get_polls(channel_id)
+        return {"polls": polls}
+    except Exception as e:
+        logger.error(f"Failed to fetch polls: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch polls")

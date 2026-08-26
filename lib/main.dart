@@ -7,6 +7,7 @@ import 'firebase_options.dart';
 import 'theme/app_theme.dart';
 import 'services/auth_service.dart';
 import 'services/stream_service.dart';
+import 'services/permission_service.dart';
 
 // Screens
 import 'screens/splash_onboarding_screen.dart';
@@ -53,6 +54,7 @@ class PlanMateApp extends StatelessWidget {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => AuthService()),
+        ChangeNotifierProvider(create: (_) => PermissionService()),
       ],
       child: MaterialApp(
         title: 'iternity',

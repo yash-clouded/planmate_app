@@ -44,6 +44,41 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           type: _MsgType.system,
         ));
       }
+      _loadPolls();
+    }
+  }
+
+  Future<void> _loadPolls() async {
+    if (_group == null) return;
+    try {
+      final channelId = 'messaging:${_group!.name}';
+      final result = await BackendService.instance.getPolls(channelId);
+      final polls = result['polls'] as List<dynamic>? ?? [];
+      for (final poll in polls) {
+        final options = (poll['options'] as List<dynamic>?)?.cast<String>() ?? ['Yes', 'No'];
+        setState(() {
+          _messages.add(_ChatMessage(
+            text: '',
+            type: _MsgType.agent,
+            time: _now(),
+            agentSummary: 'Poll: ${poll['question'] ?? ''}',
+            agentDescription: 'Vote now!',
+            agentActionType: 'poll',
+            agentToolResults: [{
+              'tool': 'create_poll',
+              'params': {
+                'question': poll['question'] ?? 'Group poll',
+                'options': options,
+                'duration_minutes': poll['duration_minutes'] ?? 60,
+              }
+            }],
+            isPoll: true,
+            pollId: poll['poll_id']?.toString(),
+          ));
+        });
+      }
+    } catch (e) {
+      debugPrint('Failed to load polls: $e');
     }
   }
 
@@ -142,6 +177,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       final actionType = result['action_type'] ?? 'info_only';
       final isPoll = actionType == 'poll';
       final toolResults = result['tool_results'] as List<dynamic>? ?? [];
+      final pollId = result['poll_id'] as String?;
 
       setState(() {
         _messages.add(_ChatMessage(
@@ -153,6 +189,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           agentActionType: actionType,
           agentToolResults: toolResults,
           isPoll: isPoll,
+          pollId: pollId,
         ));
       });
     } catch (e) {
@@ -192,7 +229,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   @override
   Widget build(BuildContext context) {
     final groupName = _group?.name ?? 'Group Chat';
-    final memberCount = _members.where((m) => !m.isAgent).length;
+    final memberCount = _members.where((m) => !m.isAgent).length + 1; // +1 for current user
 
     return Scaffold(
       backgroundColor: AppTheme.background,
@@ -358,10 +395,26 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 options: options.map((o) => PollOption(label: o)).toList(),
                 totalVotes: 0,
                 showResult: false,
-                onVote: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Vote cast!')),
-                  );
+                onVote: (index) async {
+                  try {
+                    final channelId = 'messaging:${_group!.name}';
+                    await BackendService.instance.castPollVote(
+                      channelId: channelId,
+                      pollId: msg.pollId ?? '',
+                      optionIndex: index,
+                    );
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Vote cast!')),
+                      );
+                    }
+                  } catch (e) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Vote failed: $e')),
+                      );
+                    }
+                  }
                 },
               ),
             );
@@ -571,6 +624,7 @@ class _ChatMessage {
   final String? agentActionType;
   final List<dynamic>? agentToolResults;
   final bool isPoll;
+  final String? pollId;
 
   const _ChatMessage({
     required this.text,
@@ -582,5 +636,6 @@ class _ChatMessage {
     this.agentActionType,
     this.agentToolResults,
     this.isPoll = false,
+    this.pollId,
   });
 }
