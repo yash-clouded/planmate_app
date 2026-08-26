@@ -2,7 +2,9 @@ services:
   - type: redis
     name: planmate-redis
     plan: free
-    maxmemoryPolicy: noeviction
+    ipAllowList:
+      - source: 0.0.0.0/0
+        description: Allow all
 
   - type: web
     name: planmate-backend
@@ -24,5 +26,6 @@ services:
         sync: false
       - key: REDIS_URL
         fromService:
+          type: redis
           name: planmate-redis
           property: connectionString
