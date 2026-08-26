@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str = "redis://localhost:6379/0"
 
+    # External APIs
+    google_places_api_key: str = ""
+    tmdb_api_key: str = ""
+    razorpay_key_id: str = ""
+    razorpay_key_secret: str = ""
+
     # App
     app_host: str = "0.0.0.0"
     app_port: int = 8000

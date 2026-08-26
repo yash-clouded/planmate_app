@@ -7,9 +7,14 @@ We filter for @agent mentions and route to the agent service.
 
 import hashlib
 import hmac
+import json
 import logging
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from datetime import datetime
+from pathlib import Path
+
+import httpx
+from fastapi import APIRouter, File, Header, HTTPException, Request, UploadFile
 
 from app.config import settings
 from app.models.schemas import WebhookPayload
@@ -243,3 +248,118 @@ async def get_polls(channel_id: str):
     except Exception as e:
         logger.error(f"Failed to fetch polls: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch polls")
+
+
+@router.post("/upload/image")
+async def upload_image(file: UploadFile = File(...)):
+    """
+    Upload an image for group photos, avatars, etc.
+    Returns the public URL of the uploaded image.
+    """
+    try:
+        upload_dir = Path("uploads")
+        upload_dir.mkdir(exist_ok=True)
+
+        file_ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
+        file_name = f"{datetime.utcnow().timestamp()}.{file_ext}"
+        file_path = upload_dir / file_name
+
+        content = await file.read()
+        with open(file_path, "wb") as f:
+            f.write(content)
+
+        # In production, serve these via CDN or cloud storage (S3, Cloudinary, etc.)
+        # Return relative path; frontend constructs full URL from backendUrl
+        return {
+            "url": f"/uploads/{file_name}",
+            "filename": file_name,
+            "size": len(content),
+        }
+    except Exception as e:
+        logger.error(f"Image upload failed: {e}")
+        raise HTTPException(status_code=500, detail="Image upload failed")
+
+
+@router.post("/itinerary/generate")
+async def generate_itinerary(request: Request):
+    """
+    Generate a trip itinerary based on group conversation context.
+    """
+    body = await request.json()
+    channel_id = body.get("channel_id")
+    days = body.get("days", 3)
+
+    if not channel_id:
+        raise HTTPException(status_code=400, detail="channel_id required")
+
+    try:
+        recent = await redis_store.get_recent_messages(channel_id, limit=50)
+        context_str = "\n".join(
+            f"[{m.get('user_name', m.get('user_id', '?'))}]: {m['text']}"
+            for m in recent
+        )
+
+        itinerary_prompt = f"""Generate a {days}-day trip itinerary based on this conversation:
+
+{context_str}
+
+Format as JSON:
+{{
+  "title": "Trip Title",
+  "days": [
+    {{
+      "day": 1,
+      "theme": "Day 1 theme",
+      "activities": [
+        {{"time": "9:00 AM", "activity": "Activity description", "location": "Place name"}}
+      ]
+    }}
+  ]
+}}"""
+
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(
+                f"{settings.nvidia_base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.nvidia_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.nvidia_model,
+                    "messages": [
+                        {"role": "system", "content": "You are a trip planner. Generate detailed itineraries in JSON format only."},
+                        {"role": "user", "content": itinerary_prompt},
+                    ],
+                    "temperature": 0.5,
+                    "max_tokens": 2048,
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+
+        content = data["choices"][0]["message"].get("content", "")
+        try:
+            if "```json" in content:
+                json_str = content.split("```json")[1].split("```")[0].strip()
+            else:
+                start = content.find("{")
+                end = content.rfind("}") + 1
+                json_str = content[start:end] if start >= 0 else content
+            itinerary = json.loads(json_str)
+        except Exception:
+            itinerary = {
+                "title": "Trip Plan",
+                "days": [
+                    {
+                        "day": i + 1,
+                        "theme": f"Day {i + 1}",
+                        "activities": [{"time": "TBD", "activity": "Plan activities", "location": "TBD"}],
+                    }
+                    for i in range(days)
+                ],
+            }
+
+        return itinerary
+    except Exception as e:
+        logger.error(f"Itinerary generation failed: {e}")
+        raise HTTPException(status_code=500, detail="Itinerary generation failed")

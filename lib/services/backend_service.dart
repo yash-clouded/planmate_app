@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'api_config.dart';
 
@@ -98,6 +99,41 @@ class BackendService {
     ).timeout(_timeout);
     if (resp.statusCode != 200) {
       throw Exception('Failed to fetch polls: ${resp.body}');
+    }
+    return jsonDecode(resp.body);
+  }
+
+  /// Upload an image to the backend.
+  Future<Map<String, dynamic>> uploadImage(String filePath) async {
+    final file = File(filePath);
+    if (!file.existsSync()) {
+      throw Exception('File not found');
+    }
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('$_base/webhooks/upload/image'),
+    );
+    request.files.add(await http.MultipartFile.fromPath('file', filePath));
+    final streamed = await request.send().timeout(_timeout);
+    final resp = await http.Response.fromStream(streamed);
+    if (resp.statusCode != 200) {
+      throw Exception('Upload failed: ${resp.body}');
+    }
+    return jsonDecode(resp.body);
+  }
+
+  /// Generate a trip itinerary based on group conversation.
+  Future<Map<String, dynamic>> generateItinerary({
+    required String channelId,
+    int days = 3,
+  }) async {
+    final resp = await http.post(
+      Uri.parse('$_base/webhooks/itinerary/generate'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'channel_id': channelId, 'days': days}),
+    ).timeout(_timeout);
+    if (resp.statusCode != 200) {
+      throw Exception('Itinerary generation failed: ${resp.body}');
     }
     return jsonDecode(resp.body);
   }

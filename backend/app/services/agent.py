@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 
 from app.config import settings
+from app.services.external_api import external_api
 from app.services import redis_store
 
 logger = logging.getLogger(__name__)
@@ -421,119 +422,17 @@ async def _call_ai(user_message: str) -> dict[str, Any]:
 async def _execute_tool(tool_name: str, params: dict) -> dict:
     """Execute a tool call — these hit real or mock APIs."""
     if tool_name == "search_hotels":
-        return await _search_hotels(params)
+        return await external_api.search_hotels(params)
     elif tool_name == "search_movies":
-        return await _search_movies(params)
+        return await external_api.search_movies(params)
     elif tool_name == "search_restaurants":
-        return await _search_restaurants(params)
+        return await external_api.search_restaurants(params)
     elif tool_name == "generate_payment_link":
-        return await _generate_payment_link(params)
+        return await external_api.generate_razorpay_payment_link(params)
     elif tool_name == "create_poll":
         return {"status": "poll_created", "params": params}
     else:
         return {"error": f"Unknown tool: {tool_name}"}
-
-
-async def _search_hotels(params: dict) -> dict:
-    """Search hotels — for v1 returns mock data, replace with real API."""
-    location = params.get("location", "Unknown")
-    budget = params.get("budget_per_night", 3000)
-
-    # TODO: Replace with real hotel API (OYO, Booking.com, etc.)
-    return {
-        "results": [
-            {
-                "name": f"Hotel {location} View",
-                "price": budget,
-                "image_url": "",
-                "details": f"2 nights, {params.get('num_rooms', 1)} room(s)",
-                "rating": 4.2,
-            },
-            {
-                "name": f"{location} Grand Resort",
-                "price": int(budget * 1.3),
-                "image_url": "",
-                "details": f"2 nights, {params.get('num_rooms', 1)} room(s), breakfast included",
-                "rating": 4.5,
-            },
-            {
-                "name": f"Budget Stay {location}",
-                "price": int(budget * 0.7),
-                "image_url": "",
-                "details": f"2 nights, {params.get('num_rooms', 1)} room(s)",
-                "rating": 3.8,
-            },
-        ],
-        "location": location,
-    }
-
-
-async def _search_movies(params: dict) -> dict:
-    """Search movies — for v1 returns mock data."""
-    city = params.get("city", "Unknown")
-
-    # TODO: Replace with real booking API (BookMyShow, Fandango)
-    return {
-        "results": [
-            {
-                "name": "Pushpa 2: The Rule",
-                "showtimes": ["10:00 AM", "1:30 PM", "6:00 PM", "9:30 PM"],
-                "theater": f"PVR {city} Mall",
-                "price": 250,
-            },
-            {
-                "name": "War 2",
-                "showtimes": ["11:00 AM", "2:00 PM", "7:00 PM"],
-                "theater": f"INOX {city} Centre",
-                "price": 300,
-            },
-        ],
-        "city": city,
-    }
-
-
-async def _search_restaurants(params: dict) -> dict:
-    """Search restaurants — for v1 returns mock data."""
-    location = params.get("location", "Unknown")
-
-    # TODO: Replace with real restaurant API (Zomato, Google Places)
-    return {
-        "results": [
-            {
-                "name": f"Spice Garden {location}",
-                "cuisine": params.get("cuisine", "Multi-cuisine"),
-                "price_for_two": 800,
-                "rating": 4.3,
-                "details": "Indoor seating, family-friendly",
-            },
-            {
-                "name": f"The {location} Kitchen",
-                "cuisine": params.get("cuisine", "North Indian"),
-                "price_for_two": 1200,
-                "rating": 4.6,
-                "details": "Rooftop dining, live music",
-            },
-        ],
-        "location": location,
-    }
-
-
-async def _generate_payment_link(params: dict) -> dict:
-    """Generate a payment link — for v1 returns mock UPI link."""
-    amount = params.get("amount", 0)
-    description = params.get("description", "PlanMate Booking")
-    split_count = params.get("split_count", 1)
-    per_person = amount // split_count if split_count > 0 else amount
-
-    # TODO: Replace with real Razorpay/Stripe integration
-    return {
-        "payment_url": f"upi://pay?pa=planmate@upi&pn=PlanMate&am={per_person}&tn={description}",
-        "amount": amount,
-        "per_person": per_person,
-        "split_count": split_count,
-        "description": description,
-        "status": "link_generated",
-    }
 
 
 async def confirm_booking(channel_id: str) -> dict:
@@ -549,7 +448,7 @@ async def confirm_booking(channel_id: str) -> dict:
                 results = tr["result"].get("results", [])
                 if results:
                     price = results[0].get("price", 0) * 2  # 2 nights
-                    payment = await _generate_payment_link({
+                    payment = await external_api.generate_razorpay_payment_link({
                         "amount": price,
                         "description": f"Booking at {results[0]['name']}",
                         "split_count": 6,
