@@ -1,11 +1,4 @@
 services:
-  - type: redis
-    name: planmate-redis
-    plan: free
-    ipAllowList:
-      - source: 0.0.0.0/0
-        description: Allow all
-
   - type: web
     name: planmate-backend
     rootDir: backend
@@ -25,7 +18,4 @@ services:
       - key: WEBHOOK_SECRET
         sync: false
       - key: REDIS_URL
-        fromService:
-          type: redis
-          name: planmate-redis
-          property: connectionString
+        value: rediss://default:gQAAAAAAApc1AAIgcDFhMTQ5NjZlN2Y1MDg0ODRjOWYzNTk2ZDVjZjhjMWIzYg@smooth-husky-169781.upstash.io:6379
