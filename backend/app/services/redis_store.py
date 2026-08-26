@@ -20,18 +20,10 @@ _redis: aioredis.Redis | None = None
 async def get_redis() -> aioredis.Redis:
     global _redis
     if _redis is None:
-        redis_url = settings.redis_url
-        if redis_url.startswith("rediss://"):
-            _redis = aioredis.from_url(
-                redis_url,
-                decode_responses=True,
-                ssl=True,
-            )
-        else:
-            _redis = aioredis.from_url(
-                redis_url,
-                decode_responses=True,
-            )
+        _redis = aioredis.from_url(
+            settings.redis_url,
+            decode_responses=True,
+        )
     return _redis
 
 
