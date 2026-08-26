@@ -82,7 +82,7 @@ planmate_app/
    ```
 4. Update `lib/services/api_config.dart`:
    - Set `streamApiKey` from your Stream dashboard
-   - Set `backendUrl` to your Render backend URL (e.g., `https://planmate-backend.onrender.com`)
+    - Set `backendUrl` to your Render backend URL (e.g., `https://planmate-app.onrender.com`)
 5. Run the app:
    ```bash
    flutter run
