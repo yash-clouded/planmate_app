@@ -142,10 +142,11 @@ async def stream_webhook(
 
             except Exception as e:
                 logger.exception(f"Agent processing failed for {msg.cid}")
+                error_detail = str(e)
                 await send_agent_card(
                     channel_id=msg.cid,
-                    summary="Sorry, I had trouble processing that. Could you try again?",
-                    description=str(e)[:200],
+                    summary="Sorry, I had trouble processing that.",
+                    description=error_detail[:400],
                 )
 
     return {"status": "ok"}
@@ -209,6 +210,41 @@ async def confirm_booking_endpoint(channel_id: str):
     from app.services.agent import confirm_booking
     result = await confirm_booking(channel_id)
     return result
+
+
+@router.get("/agent/health")
+async def agent_health():
+    """
+    Diagnostics for the AI agent connection.
+    Returns config status and tests the NVIDIA API with a minimal request.
+    """
+    from app.config import settings
+    from app.services.agent import _call_ai
+
+    status = {
+        "nvidia_base_url": settings.nvidia_base_url,
+        "nvidia_model": settings.nvidia_model,
+        "nvidia_api_key_set": bool(settings.nvidia_api_key),
+        "api_key_prefix": settings.nvidia_api_key[:8] + "..." if settings.nvidia_api_key else None,
+    }
+
+    try:
+        test_result = await _call_ai("hi")
+        status["test_call"] = {
+            "ok": True,
+            "summary": test_result.get("summary", "")[:120],
+            "action_type": test_result.get("action_type", ""),
+            "error": test_result.get("error"),
+            "error_type": test_result.get("error_type"),
+        }
+    except Exception as e:
+        status["test_call"] = {
+            "ok": False,
+            "error": str(e)[:300],
+            "error_type": type(e).__name__,
+        }
+
+    return status
 
 
 @router.post("/agent/command")

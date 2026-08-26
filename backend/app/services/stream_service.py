@@ -15,6 +15,13 @@ logger = logging.getLogger(__name__)
 STREAM_BASE = settings.stream_api_base_url
 
 
+def _channel_id(channel_id: str) -> str:
+    """Strip the messaging: prefix if present, because the REST path already includes /channels/messaging/."""
+    if channel_id.startswith("messaging:"):
+        return channel_id[len("messaging:"):]
+    return channel_id
+
+
 async def _headers() -> dict:
     return {
         "Authorization": f"Bearer {settings.stream_api_key}",
@@ -45,7 +52,7 @@ async def send_agent_message(
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.post(
-            f"{STREAM_BASE}/channels/messaging/{channel_id}/message",
+            f"{STREAM_BASE}/channels/messaging/{_channel_id(channel_id)}/message",
             headers=await _headers(),
             json=payload,
         )
@@ -159,7 +166,7 @@ async def add_agent_to_channel(channel_id: str) -> dict:
     """Add the agent as a member of a group channel."""
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.post(
-            f"{STREAM_BASE}/channels/messaging/{channel_id}",
+            f"{STREAM_BASE}/channels/messaging/{_channel_id(channel_id)}",
             headers=await _headers(),
             json={
                 "add_members": ["planmate-agent"],

@@ -1,6 +1,8 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../theme/app_theme.dart';
 import '../services/api_config.dart';
 import '../services/backend_service.dart';
@@ -27,55 +29,109 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
     super.dispose();
   }
 
-  void _addMember() {
-    final nameController = TextEditingController();
-    final phoneController = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Add Member'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameController,
-              textCapitalization: TextCapitalization.words,
-              decoration: AppTheme.inputDecoration(hintText: 'Name'),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: phoneController,
-              keyboardType: TextInputType.phone,
-              decoration: AppTheme.inputDecoration(hintText: 'Phone number'),
-            ),
+  Future<void> _addMember() async {
+    final status = await Permission.contacts.status;
+    if (!status.isGranted) {
+      final rationale = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Contacts Permission'),
+          content: const Text('PlanMate needs access to your contacts to add group members quickly.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Deny')),
+            ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Allow')),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              final name = nameController.text.trim();
-              final phone = phoneController.text.trim();
-              if (name.isNotEmpty) {
-                setState(() {
-                  _members.add(_MemberChip(
-                    name: name,
-                    phone: phone.isNotEmpty ? phone : '',
-                  ));
-                });
-              }
-              Navigator.pop(ctx);
-            },
-            style: AppTheme.primaryButtonStyle,
-            child: const Text('Add'),
-          ),
-        ],
+      );
+      if (rationale != true) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Contacts permission denied — you can still add members manually.')),
+          );
+        }
+        return;
+      }
+      final requested = await Permission.contacts.request();
+      if (!requested.isGranted) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Contacts permission denied')),
+          );
+        }
+        return;
+      }
+    }
+
+    final contacts = await FlutterContacts.getContacts(withProperties: true, withPhoto: true);
+    if (!mounted) return;
+
+    final selected = await showModalBottomSheet<Contact>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        decoration: const BoxDecoration(
+          color: AppTheme.surface,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              margin: const EdgeInsets.only(top: 12),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppTheme.border,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.all(20),
+              child: Text('Select Contact', style: AppTheme.titleLarge),
+            ),
+            SizedBox(
+              height: 400,
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: contacts.length,
+                itemBuilder: (ctx, i) {
+                  final c = contacts[i];
+                  final displayName = c.displayName;
+                  final phone = c.phones.isNotEmpty ? c.phones.first.number : '';
+                  return ListTile(
+                    leading: CircleAvatar(
+                      backgroundColor: AppTheme.primary.withOpacity(0.1),
+                      backgroundImage: c.thumbnail != null ? MemoryImage(c.thumbnail!) : null,
+                      child: c.thumbnail == null
+                          ? Text(
+                              displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
+                              style: const TextStyle(fontWeight: FontWeight.w600),
+                            )
+                          : null,
+                    ),
+                    title: Text(displayName, style: AppTheme.bodyLarge),
+                    subtitle: Text(phone, style: AppTheme.bodySmall),
+                    onTap: () => Navigator.pop(ctx, c),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
       ),
     );
+
+    if (selected != null) {
+      final name = selected.displayName.trim();
+      final phone = selected.phones.isNotEmpty ? selected.phones.first.number.replaceAll(RegExp(r'[^0-9+]'), '') : '';
+      if (name.isNotEmpty) {
+        setState(() {
+          _members.add(_MemberChip(name: name, phone: phone));
+        });
+      }
+    }
   }
 
   @override
@@ -112,6 +168,32 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
   }
 
   Future<void> _pickAndUploadImage() async {
+    final photoStatus = await Permission.photos.status;
+    if (!photoStatus.isGranted) {
+      final rationale = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Photos Permission'),
+          content: const Text('PlanMate needs access to your photos to set a group picture.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Deny')),
+            ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Allow')),
+          ],
+        ),
+      );
+      if (rationale != true) return;
+      final requested = await Permission.photos.request();
+      if (!requested.isGranted) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Photos permission denied')),
+          );
+        }
+        return;
+      }
+    }
+
     final picker = ImagePicker();
     final picked = await picker.pickImage(
       source: ImageSource.gallery,

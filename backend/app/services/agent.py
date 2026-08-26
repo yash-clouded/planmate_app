@@ -345,25 +345,31 @@ async def _process_general_mention(channel_id: str, mention_text: str) -> dict[s
 async def _call_ai(user_message: str) -> dict[str, Any]:
     """Call NVIDIA NIM (OpenAI-compatible) API with tool definitions."""
     try:
+        url = f"{settings.nvidia_base_url}/chat/completions"
+        payload = {
+            "model": settings.nvidia_model,
+            "messages": [
+                {"role": "system", "content": AGENT_SYSTEM_PROMPT},
+                {"role": "user", "content": user_message},
+            ],
+            "tools": TOOLS,
+            "tool_choice": "auto",
+            "temperature": 0.3,
+            "max_tokens": 1024,
+        }
+        logger.info(f"Calling NVIDIA API: url={url} model={settings.nvidia_model} key_set={bool(settings.nvidia_api_key)}")
         async with httpx.AsyncClient(timeout=20.0) as client:
             response = await client.post(
-                f"{settings.nvidia_base_url}/chat/completions",
+                url,
                 headers={
                     "Authorization": f"Bearer {settings.nvidia_api_key}",
                     "Content-Type": "application/json",
                 },
-                json={
-                    "model": settings.nvidia_model,
-                    "messages": [
-                        {"role": "system", "content": AGENT_SYSTEM_PROMPT},
-                        {"role": "user", "content": user_message},
-                    ],
-                    "tools": TOOLS,
-                    "tool_choice": "auto",
-                    "temperature": 0.3,
-                    "max_tokens": 1024,
-                },
+                json=payload,
             )
+            logger.info(f"NVIDIA API response status: {response.status_code}")
+            if response.status_code != 200:
+                logger.error(f"NVIDIA API error body: {response.text[:500]}")
             response.raise_for_status()
             data = response.json()
 
@@ -416,6 +422,8 @@ async def _call_ai(user_message: str) -> dict[str, Any]:
             "needs_confirmation": False,
             "action_type": "rejected",
             "tool_calls": [],
+            "error": str(e),
+            "error_type": type(e).__name__,
         }
 
 

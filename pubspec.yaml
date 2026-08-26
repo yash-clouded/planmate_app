@@ -38,6 +38,12 @@ dependencies:
   # Local storage for groups and settings
   shared_preferences: ^2.3.2
 
+  # Runtime permissions
+  permission_handler: ^11.3.1
+
+  # Phone contacts picker
+  flutter_contacts: ^1.1.7
+
   # Geolocator for trip mode
   geolocator: ^13.0.1
 

@@ -1,7 +1,10 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../theme/app_theme.dart';
+import '../services/auth_service.dart';
+import '../services/stream_service.dart';
 
 /// Simple persistent group store — uses shared_preferences so groups survive app restarts.
 class GroupStore {
@@ -76,10 +79,66 @@ class ChatListScreen extends StatefulWidget {
 }
 
 class _ChatListScreenState extends State<ChatListScreen> {
+  bool _isLoadingChannels = false;
+
   @override
   void initState() {
     super.initState();
     GroupStore.instance.load();
+    _connectStreamUser();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _refreshStreamChannels();
+  }
+
+  Future<void> _connectStreamUser() async {
+    final authService = Provider.of<AuthService>(context, listen: false);
+    final user = authService.currentUser;
+    if (user == null) return;
+    final name = user.displayName ?? user.phoneNumber ?? 'User';
+    try {
+      await StreamChatService.instance.connectUser(
+        userId: user.uid,
+        name: name,
+      );
+    } catch (e) {
+      debugPrint('Stream connect failed: $e');
+    }
+  }
+
+  Future<void> _refreshStreamChannels() async {
+    if (_isLoadingChannels) return;
+    setState(() => _isLoadingChannels = true);
+    try {
+      final channels = await StreamChatService.instance.getUserChannelsOnce();
+      final currentUserId = StreamChatService.instance.client.state.currentUser?.id;
+      for (final channel in channels) {
+        final channelId = channel.id;
+        if (channelId == null) continue;
+        final name = channel.extraData['name']?.toString() ?? channelId;
+        final memberIds = (channel.extraData['members'] as List?)?.cast<String>() ?? [];
+        final otherMembers = memberIds.where((id) => id != 'planmate-agent' && id != currentUserId).toList();
+        if (otherMembers.isEmpty) continue;
+
+        final existing = GroupStore.instance.groups.any((g) => g.name == channelId);
+        if (!existing) {
+          GroupStore.instance.addGroup(GroupData(
+            name: channelId,
+            memberNames: otherMembers,
+            autoAddAgent: memberIds.contains('planmate-agent'),
+            creatorName: otherMembers.isNotEmpty ? otherMembers.first : 'You',
+          ));
+        }
+      }
+      if (mounted) setState(() {});
+    } catch (e) {
+      debugPrint('Failed to load Stream channels: $e');
+    } finally {
+      if (mounted) setState(() => _isLoadingChannels = false);
+    }
   }
 
   @override
@@ -103,11 +162,17 @@ class _ChatListScreenState extends State<ChatListScreen> {
           ),
         ],
       ),
-      body: _buildBody(),
+      body: RefreshIndicator(
+        onRefresh: _refreshStreamChannels,
+        child: _buildBody(),
+      ),
       floatingActionButton: FloatingActionButton(
         onPressed: () async {
           await Navigator.of(context).pushNamed('/create-group');
-          if (mounted) setState(() {}); // refresh list after creating group
+          if (mounted) {
+            setState(() {});
+            _refreshStreamChannels();
+          }
         },
         backgroundColor: AppTheme.primary,
         elevation: 4,
@@ -118,6 +183,15 @@ class _ChatListScreenState extends State<ChatListScreen> {
 
   Widget _buildBody() {
     final groups = GroupStore.instance.groups;
+
+    if (_isLoadingChannels && groups.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(40),
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
 
     if (groups.isEmpty) {
       return _buildEmptyState();
