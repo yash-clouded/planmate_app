@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../main.dart';
 import '../theme/app_theme.dart';
 import '../services/auth_service.dart';
 import '../services/stream_service.dart';
@@ -17,29 +18,50 @@ class GroupStore {
 
   Future<void> load() async {
     if (_loaded) return;
+    // Mark loaded immediately so addGroup() during the async gap can't race
+    // with a second load() that would groups.clear() in-memory entries.
+    _loaded = true;
+    await _mergeFromDisk();
+  }
+
+  /// Re-read persisted groups — call when returning to the home screen.
+  Future<void> reloadFromDisk() async {
+    await _mergeFromDisk(replace: true);
+  }
+
+  Future<void> _mergeFromDisk({bool replace = false}) async {
     final prefs = await SharedPreferences.getInstance();
     final jsonString = prefs.getString(_storageKey);
-    if (jsonString != null) {
-      try {
-        final List<dynamic> list = jsonDecode(jsonString);
-        groups.clear();
-        groups.addAll(list.map((g) => GroupData(
-          name: g['name'] as String,
-          imagePath: g['imagePath'] as String?,
-          memberNames: List<String>.from(g['memberNames'] ?? []),
-          autoAddAgent: g['autoAddAgent'] as bool? ?? true,
-          creatorName: g['creatorName'] as String? ?? 'You',
-        )).toList());
-      } catch (e) {
-        debugPrint('Failed to load groups: $e');
+    if (jsonString == null) return;
+    try {
+      final List<dynamic> list = jsonDecode(jsonString);
+      final fromDisk = list.map((g) => GroupData(
+        channelId: g['channelId'] as String? ?? GroupData.generateChannelId(g['name'] as String? ?? 'group'),
+        name: g['name'] as String,
+        imagePath: g['imagePath'] as String?,
+        memberNames: List<String>.from(g['memberNames'] ?? []),
+        autoAddAgent: g['autoAddAgent'] as bool? ?? true,
+        creatorName: g['creatorName'] as String? ?? 'You',
+      )).toList();
+
+      if (replace || groups.isEmpty) {
+        groups
+          ..clear()
+          ..addAll(fromDisk);
+      } else {
+        for (final g in fromDisk) {
+          if (!hasChannel(g.channelId)) groups.add(g);
+        }
       }
+    } catch (e) {
+      debugPrint('Failed to load groups: $e');
     }
-    _loaded = true;
   }
 
   Future<void> _save() async {
     final prefs = await SharedPreferences.getInstance();
     final jsonString = jsonEncode(groups.map((g) => {
+      'channelId': g.channelId,
       'name': g.name,
       'imagePath': g.imagePath,
       'memberNames': g.memberNames,
@@ -49,13 +71,19 @@ class GroupStore {
     await prefs.setString(_storageKey, jsonString);
   }
 
-  void addGroup(GroupData group) {
+  Future<void> addGroup(GroupData group) async {
+    if (hasChannel(group.channelId)) return;
     groups.insert(0, group);
-    _save();
+    await _save();
   }
+
+  /// True if a group with this channel id is already stored.
+  bool hasChannel(String channelId) =>
+      groups.any((g) => g.channelId == channelId);
 }
 
 class GroupData {
+  final String channelId;
   final String name;
   final String? imagePath;
   final List<String> memberNames;
@@ -63,12 +91,28 @@ class GroupData {
   final String creatorName;
 
   const GroupData({
+    required this.channelId,
     required this.name,
     this.imagePath,
     required this.memberNames,
     required this.autoAddAgent,
     required this.creatorName,
   });
+
+  /// Build a Stream-safe channel id from a display name.
+  ///
+  /// Stream channel ids must match `[a-z0-9_-]` and be <= 64 chars, so we
+  /// slugify the name and append a short unique suffix to avoid collisions.
+  static String generateChannelId(String name) {
+    final slug = name
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+        .replaceAll(RegExp(r'^-+|-+$'), '');
+    final base = slug.isEmpty ? 'group' : slug;
+    final suffix = DateTime.now().millisecondsSinceEpoch.toRadixString(36);
+    final id = '$base-$suffix';
+    return id.length <= 64 ? id : id.substring(id.length - 64);
+  }
 }
 
 class ChatListScreen extends StatefulWidget {
@@ -78,20 +122,47 @@ class ChatListScreen extends StatefulWidget {
   State<ChatListScreen> createState() => _ChatListScreenState();
 }
 
-class _ChatListScreenState extends State<ChatListScreen> {
+class _ChatListScreenState extends State<ChatListScreen> with RouteAware {
   bool _isLoadingChannels = false;
 
   @override
   void initState() {
     super.initState();
-    GroupStore.instance.load();
-    _connectStreamUser();
+    _init();
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _refreshStreamChannels();
+    final route = ModalRoute.of(context);
+    if (route is PageRoute<void>) {
+      appRouteObserver.subscribe(this, route);
+    }
+  }
+
+  @override
+  void dispose() {
+    appRouteObserver.unsubscribe(this);
+    super.dispose();
+  }
+
+  /// Fired when the user pops back to this screen (e.g. from group chat).
+  @override
+  void didPopNext() {
+    _onScreenVisible();
+  }
+
+  Future<void> _onScreenVisible() async {
+    await GroupStore.instance.reloadFromDisk();
+    if (mounted) setState(() {});
+  }
+
+  /// Load stored groups, connect to Stream, then sync server channels — in order.
+  Future<void> _init() async {
+    await GroupStore.instance.load();
+    if (mounted) setState(() {});
+    await _connectStreamUser();
+    await _refreshStreamChannels();
   }
 
   Future<void> _connectStreamUser() async {
@@ -111,27 +182,32 @@ class _ChatListScreenState extends State<ChatListScreen> {
 
   Future<void> _refreshStreamChannels() async {
     if (_isLoadingChannels) return;
+    // Can't query channels until a user is connected.
+    if (StreamChatService.instance.client.state.currentUser == null) return;
     setState(() => _isLoadingChannels = true);
     try {
       final channels = await StreamChatService.instance.getUserChannelsOnce();
-      final currentUserId = StreamChatService.instance.client.state.currentUser?.id;
       for (final channel in channels) {
         final channelId = channel.id;
         if (channelId == null) continue;
-        final name = channel.extraData['name']?.toString() ?? channelId;
-        final memberIds = (channel.extraData['members'] as List?)?.cast<String>() ?? [];
-        final otherMembers = memberIds.where((id) => id != 'planmate-agent' && id != currentUserId).toList();
-        if (otherMembers.isEmpty) continue;
+        // Skip channels we already track locally (dedupe by channel id).
+        if (GroupStore.instance.hasChannel(channelId)) continue;
 
-        final existing = GroupStore.instance.groups.any((g) => g.name == channelId);
-        if (!existing) {
-          GroupStore.instance.addGroup(GroupData(
-            name: channelId,
-            memberNames: otherMembers,
-            autoAddAgent: memberIds.contains('planmate-agent'),
-            creatorName: otherMembers.isNotEmpty ? otherMembers.first : 'You',
-          ));
-        }
+        final name = channel.extraData['name']?.toString() ?? channelId;
+        final invited = (channel.extraData['invited_names'] as List?)?.cast<String>() ?? [];
+        final memberIds = channel.state?.members
+                .map((m) => m.userId)
+                .whereType<String>()
+                .toList() ??
+            [];
+
+        await GroupStore.instance.addGroup(GroupData(
+          channelId: channelId,
+          name: name,
+          memberNames: invited,
+          autoAddAgent: memberIds.contains('planmate-agent'),
+          creatorName: 'You',
+        ));
       }
       if (mounted) setState(() {});
     } catch (e) {
@@ -170,6 +246,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
         onPressed: () async {
           await Navigator.of(context).pushNamed('/create-group');
           if (mounted) {
+            await GroupStore.instance.reloadFromDisk();
             setState(() {});
             _refreshStreamChannels();
           }
@@ -267,11 +344,15 @@ class _ChatListScreenState extends State<ChatListScreen> {
     final color = _colorForGroup(group.name);
 
     return InkWell(
-      onTap: () {
-        Navigator.of(context).pushNamed(
+      onTap: () async {
+        await Navigator.of(context).pushNamed(
           '/group-chat',
           arguments: group,
         );
+        if (context.mounted) {
+          await GroupStore.instance.reloadFromDisk();
+          setState(() {});
+        }
       },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),

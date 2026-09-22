@@ -49,6 +49,7 @@ dependencies:
 
   # Google Maps for trip mode map view
   google_maps_flutter: ^2.10.1
+  stream_chat_persistence: ^9.29.0
 
 dev_dependencies:
   flutter_test:

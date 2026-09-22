@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../theme/app_theme.dart';
@@ -16,6 +17,7 @@ class _AuthPhoneScreenState extends State<AuthPhoneScreen> {
   String _selectedCountryFlag = '🇮🇳';
   bool _isValid = false;
   bool _isLoading = false;
+  Timer? _loadingTimeout;
 
   final _countries = [
     {'code': '+91', 'flag': '🇮🇳', 'name': 'India'},
@@ -40,8 +42,40 @@ class _AuthPhoneScreenState extends State<AuthPhoneScreen> {
 
   @override
   void dispose() {
+    _loadingTimeout?.cancel();
     _phoneController.dispose();
     super.dispose();
+  }
+
+  /// Start the button spinner with a hard backstop so it can never hang forever.
+  ///
+  /// Firebase's instant-verification path (`verificationCompleted`) fires neither
+  /// `codeSent` nor an error, which would otherwise leave the spinner spinning
+  /// indefinitely. If that happens we either continue (if sign-in succeeded) or
+  /// surface a retry message.
+  void _startLoading() {
+    setState(() => _isLoading = true);
+    _loadingTimeout?.cancel();
+    _loadingTimeout = Timer(const Duration(seconds: 40), () {
+      if (!mounted || !_isLoading) return;
+      setState(() => _isLoading = false);
+      final auth = Provider.of<AuthService>(context, listen: false);
+      if (auth.isLoggedIn) {
+        Navigator.of(context).pushReplacementNamed('/auth/profile');
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('This is taking longer than expected. Please try again.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+    });
+  }
+
+  void _stopLoading() {
+    _loadingTimeout?.cancel();
+    if (mounted) setState(() => _isLoading = false);
   }
 
   Future<void> _sendOtp() async {
@@ -50,29 +84,41 @@ class _AuthPhoneScreenState extends State<AuthPhoneScreen> {
     final digits = _phoneController.text.replaceAll(RegExp(r'\D'), '');
     final fullPhone = '$_selectedCountryCode$digits';
 
-    setState(() => _isLoading = true);
+    _startLoading();
 
     final authService = Provider.of<AuthService>(context, listen: false);
-    await authService.sendOtp(
-      phoneNumber: fullPhone,
-      onCodeSent: (_) {
-        setState(() => _isLoading = false);
-        if (mounted) {
-          Navigator.of(context).pushNamed('/auth/otp', arguments: fullPhone);
-        }
-      },
-      onError: (error) {
-        setState(() => _isLoading = false);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(error),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
-      },
-    );
+    try {
+      await authService.sendOtp(
+        phoneNumber: fullPhone,
+        onCodeSent: (_) {
+          _stopLoading();
+          if (mounted) {
+            Navigator.of(context).pushNamed('/auth/otp', arguments: fullPhone);
+          }
+        },
+        onError: (error) {
+          _stopLoading();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(error),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+        },
+      );
+    } catch (e) {
+      _stopLoading();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to send OTP: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -137,6 +183,25 @@ class _AuthPhoneScreenState extends State<AuthPhoneScreen> {
                               ),
                             )
                           : const Text('Send OTP'),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Center(
+                    child: TextButton(
+                      onPressed: _isLoading ? null : () {
+                        _startLoading();
+                        Provider.of<AuthService>(context, listen: false).signInWithDemo(
+                          onSuccess: (_) {
+                            _stopLoading();
+                            if (mounted) Navigator.of(context).pushReplacementNamed('/auth/profile');
+                          },
+                          onError: (err) {
+                            _stopLoading();
+                            if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+                          },
+                        );
+                      },
+                      child: const Text('Test / Demo Login', style: TextStyle(color: AppTheme.primary, fontWeight: FontWeight.w600)),
                     ),
                   ),
                   const Spacer(),

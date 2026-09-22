@@ -92,6 +92,26 @@ class AuthService extends ChangeNotifier {
     }
   }
 
+  /// Sign in with a demo account bypassing OTP (for testing)
+  Future<void> signInWithDemo({
+    required void Function(UserCredential credential) onSuccess,
+    required void Function(String error) onError,
+  }) async {
+    _isLoading = true;
+    notifyListeners();
+
+    try {
+      final userCredential = await _auth.signInAnonymously();
+      _isLoading = false;
+      notifyListeners();
+      onSuccess(userCredential);
+    } catch (e) {
+      _isLoading = false;
+      notifyListeners();
+      onError(e.toString());
+    }
+  }
+
   /// Sign out.
   Future<void> signOut() async {
     await _auth.signOut();

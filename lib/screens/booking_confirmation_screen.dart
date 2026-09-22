@@ -1,11 +1,26 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../theme/app_theme.dart';
+import '../services/stream_service.dart';
 
 class BookingConfirmationScreen extends StatelessWidget {
   const BookingConfirmationScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final args = ModalRoute.of(context)?.settings.arguments;
+    final data = args is Map<String, dynamic> ? args : <String, dynamic>{};
+
+    final hotelName = data['name'] as String? ?? 'Snow Valley Resort';
+    final location = data['location'] as String? ?? 'Manali, Himachal Pradesh';
+    final dates = data['dates'] as String? ?? 'Aug 30 – Sep 1, 2025';
+    final nights = data['nights'] as String? ?? '2 nights';
+    final rooms = data['rooms'] as String? ?? '3 rooms';
+    final guests = data['guests'] as String? ?? '6 guests';
+    final bookingId = data['booking_id'] as String? ?? 'PM-28491';
+    final totalPrice = data['total_price'] as String? ?? '₹21,500';
+    final channelId = data['channel_id'] as String?;
+
     return Scaffold(
       backgroundColor: AppTheme.background,
       appBar: AppBar(
@@ -34,11 +49,18 @@ class BookingConfirmationScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 32),
-            _buildSummaryCard(),
-            const SizedBox(height: 24),
-            _buildQrCode(),
+            _buildSummaryCard(
+              hotelName: hotelName,
+              location: location,
+              dates: dates,
+              nights: nights,
+              rooms: rooms,
+              guests: guests,
+              bookingId: bookingId,
+              totalPrice: totalPrice,
+            ),
             const SizedBox(height: 32),
-            _buildActionButtons(context),
+            _buildActionButtons(context, channelId: channelId, hotelName: hotelName, location: location, dates: dates),
             SizedBox(height: MediaQuery.of(context).padding.bottom + 24),
           ],
         ),
@@ -62,14 +84,22 @@ class BookingConfirmationScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildSummaryCard() {
+  Widget _buildSummaryCard({
+    required String hotelName,
+    required String location,
+    required String dates,
+    required String nights,
+    required String rooms,
+    required String guests,
+    required String bookingId,
+    required String totalPrice,
+  }) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: AppTheme.cardDecoration,
       child: Column(
         children: [
-          // Hotel image placeholder
           ClipRRect(
             borderRadius: BorderRadius.circular(12),
             child: Container(
@@ -82,13 +112,10 @@ class BookingConfirmationScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          const Text(
-            'Snow Valley Resort',
-            style: AppTheme.titleLarge,
-          ),
+          Text(hotelName, style: AppTheme.titleLarge),
           const SizedBox(height: 4),
           Text(
-            'Manali, Himachal Pradesh',
+            location,
             style: AppTheme.bodyMedium.copyWith(color: AppTheme.textSecondary),
           ),
           const SizedBox(height: 16),
@@ -100,11 +127,11 @@ class BookingConfirmationScreen extends StatelessWidget {
             ),
             child: Column(
               children: [
-                _detailRow(Icons.calendar_today, 'Aug 30 – Sep 1, 2025', '2 nights'),
+                _detailRow(Icons.calendar_today, '$dates', nights),
                 const Divider(color: AppTheme.borderLight),
-                _detailRow(Icons.person, '3 rooms', '6 guests'),
+                _detailRow(Icons.person, rooms, guests),
                 const Divider(color: AppTheme.borderLight),
-                _detailRow(Icons.confirmation_number, 'Booking ID', 'PM-28491'),
+                _detailRow(Icons.confirmation_number, 'Booking ID', bookingId),
               ],
             ),
           ),
@@ -116,7 +143,7 @@ class BookingConfirmationScreen extends StatelessWidget {
                 color: AppTheme.textSecondary,
               )),
               Text(
-                '₹21,500',
+                totalPrice,
                 style: AppTheme.headlineMedium.copyWith(color: AppTheme.primary),
               ),
             ],
@@ -148,36 +175,40 @@ class BookingConfirmationScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildQrCode() {
-    return Container(
-      width: 160,
-      height: 160,
-      padding: const EdgeInsets.all(16),
-      decoration: AppTheme.cardDecoration,
-      child: CustomPaint(
-        painter: _QrPlaceholderPainter(),
-        child: const Center(
-          child: Text(
-            'QR Code',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: AppTheme.textSecondary,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildActionButtons(BuildContext context) {
+  Widget _buildActionButtons(BuildContext context, {
+    String? channelId,
+    required String hotelName,
+    required String location,
+    required String dates,
+  }) {
     return Row(
       children: [
         Expanded(
           child: OutlinedButton.icon(
-            onPressed: () {
-              // TODO: share to group
-            },
+            onPressed: channelId != null
+                ? () async {
+                    try {
+                      await StreamChatService.instance.sendMessage(
+                        channelId: channelId,
+                        text: 'Booking confirmed at $hotelName, $location ($dates)',
+                      );
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Booking shared to group chat'),
+                            backgroundColor: AppTheme.success,
+                          ),
+                        );
+                      }
+                    } catch (e) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Failed to share: $e')),
+                        );
+                      }
+                    }
+                  }
+                : null,
             style: AppTheme.outlinedButtonStyle.copyWith(
               padding: WidgetStateProperty.all(
                 const EdgeInsets.symmetric(vertical: 14),
@@ -190,8 +221,23 @@ class BookingConfirmationScreen extends StatelessWidget {
         const SizedBox(width: 12),
         Expanded(
           child: OutlinedButton.icon(
-            onPressed: () {
-              // TODO: add to calendar
+            onPressed: () async {
+              final now = DateTime.now();
+              final end = now.add(const Duration(days: 2));
+              final uri = Uri(
+                scheme: 'https',
+                host: 'calendar.google.com',
+                path: '/calendar/render',
+                queryParameters: {
+                  'action': 'TEMPLATE',
+                  'text': 'Trip: $hotelName',
+                  'details': 'Booking at $hotelName, $location',
+                  'dates': '${now.toUtc().toIso8601String().replaceAll('-', '').replaceAll(':', '').split('.').first}/${end.toUtc().toIso8601String().replaceAll('-', '').replaceAll(':', '').split('.').first}',
+                },
+              );
+              if (await canLaunchUrl(uri)) {
+                await launchUrl(uri, mode: LaunchMode.externalApplication);
+              }
             },
             style: AppTheme.outlinedButtonStyle.copyWith(
               padding: WidgetStateProperty.all(
@@ -205,42 +251,4 @@ class BookingConfirmationScreen extends StatelessWidget {
       ],
     );
   }
-}
-
-class _QrPlaceholderPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = AppTheme.textPrimary.withOpacity(0.15)
-      ..style = PaintingStyle.fill;
-
-    final cellSize = size.width / 10;
-    // Draw a simple QR-like pattern
-    final pattern = [
-      [0,0,0,1,0,1,0,0,0,0],
-      [0,1,1,1,0,1,1,1,0,0],
-      [0,1,0,1,0,1,0,1,0,0],
-      [0,1,1,1,0,1,1,1,0,0],
-      [0,0,0,0,0,0,0,0,0,0],
-      [1,0,1,1,0,1,0,1,1,0],
-      [0,0,0,0,0,1,0,0,0,0],
-      [0,1,1,0,1,0,1,1,0,0],
-      [0,0,1,0,0,1,0,1,0,0],
-      [0,0,0,0,0,0,0,0,0,0],
-    ];
-
-    for (int r = 0; r < 10; r++) {
-      for (int c = 0; c < 10; c++) {
-        if (pattern[r][c] == 1) {
-          canvas.drawRect(
-            Rect.fromLTWH(c * cellSize, r * cellSize, cellSize - 1, cellSize - 1),
-            paint,
-          );
-        }
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

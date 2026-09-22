@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../theme/app_theme.dart';
 
 class PaymentMethodsScreen extends StatefulWidget {
@@ -10,6 +12,41 @@ class PaymentMethodsScreen extends StatefulWidget {
 
 class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
   final List<_PaymentMethod> _methods = [];
+  static const _storageKey = 'planmate_payment_methods';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMethods();
+  }
+
+  Future<void> _loadMethods() async {
+    final prefs = await SharedPreferences.getInstance();
+    final jsonString = prefs.getString(_storageKey);
+    if (jsonString != null) {
+      try {
+        final List<dynamic> list = jsonDecode(jsonString);
+        setState(() {
+          _methods.clear();
+          _methods.addAll(list.map((m) => _PaymentMethod(
+            type: m['type'] as String? ?? 'UPI',
+            detail: m['detail'] as String? ?? '',
+            isDefault: m['isDefault'] as bool? ?? false,
+          )));
+        });
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _saveMethods() async {
+    final prefs = await SharedPreferences.getInstance();
+    final jsonString = jsonEncode(_methods.map((m) => {
+      'type': m.type,
+      'detail': m.detail,
+      'isDefault': m.isDefault,
+    }).toList());
+    await prefs.setString(_storageKey, jsonString);
+  }
 
   void _addMethod() {
     final nameController = TextEditingController();
@@ -58,6 +95,7 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
                       isDefault: _methods.isEmpty,
                     ));
                   });
+                  _saveMethods();
                   Navigator.pop(ctx);
                 }
               },
@@ -77,6 +115,7 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
         _methods.first.isDefault = true;
       }
     });
+    _saveMethods();
   }
 
   @override

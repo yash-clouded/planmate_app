@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
+from app.routers.auth import router as auth_router
 from app.routers.webhooks import router as webhook_router
 from app.services.redis_store import get_redis
 from app.services.stream_service import create_bot_user
@@ -69,6 +70,7 @@ app.add_middleware(
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 app.include_router(webhook_router)
+app.include_router(auth_router)
 
 
 @app.get("/")

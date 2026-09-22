@@ -226,7 +226,9 @@ class _TripModeScreenState extends State<TripModeScreen> {
                     children: [
                       Expanded(
                         child: OutlinedButton.icon(
-                          onPressed: () {},
+                          onPressed: () {
+                            Navigator.of(context).pop();
+                          },
                           style: AppTheme.outlinedButtonStyle.copyWith(
                             padding: WidgetStateProperty.all(
                               const EdgeInsets.symmetric(vertical: 10),
@@ -240,7 +242,14 @@ class _TripModeScreenState extends State<TripModeScreen> {
                       const SizedBox(width: 12),
                       Expanded(
                         child: OutlinedButton.icon(
-                          onPressed: () {},
+                          onPressed: () {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Location shared to group chat'),
+                                backgroundColor: AppTheme.tripGreen,
+                              ),
+                            );
+                          },
                           style: AppTheme.outlinedButtonStyle.copyWith(
                             padding: WidgetStateProperty.all(
                               const EdgeInsets.symmetric(vertical: 10),
@@ -344,7 +353,9 @@ class _TripModeScreenState extends State<TripModeScreen> {
               children: [
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: () {},
+                    onPressed: () {
+                      setState(() => _showAlert = false);
+                    },
                     style: AppTheme.primaryButtonStyle.copyWith(
                       padding: WidgetStateProperty.all(
                         const EdgeInsets.symmetric(vertical: 10),
@@ -357,7 +368,15 @@ class _TripModeScreenState extends State<TripModeScreen> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: () {},
+                    onPressed: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Calculating alternate route...'),
+                          backgroundColor: AppTheme.accent,
+                        ),
+                      );
+                      setState(() => _showAlert = false);
+                    },
                     style: AppTheme.accentButtonStyle.copyWith(
                       padding: WidgetStateProperty.all(
                         const EdgeInsets.symmetric(vertical: 10),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../theme/app_theme.dart';
 import '../services/permission_service.dart';
+import '../services/backend_service.dart';
 
 class SplashOnboardingScreen extends StatefulWidget {
   const SplashOnboardingScreen({super.key});
@@ -41,10 +42,20 @@ class _SplashOnboardingScreenState extends State<SplashOnboardingScreen>
 
   Future<void> _handleContinue() async {
     setState(() => _isRequestingPermissions = true);
+    // Wake the (possibly cold-started) backend in the background so it's ready
+    // by the time the user reaches a screen that needs it.
+    BackendService.instance.warmUp();
     final permissionService = Provider.of<PermissionService>(context, listen: false);
-    await permissionService.requestAll();
-    if (mounted) {
-      Navigator.of(context).pushReplacementNamed('/auth/phone');
+    try {
+      await permissionService.requestAll();
+    } catch (e) {
+      debugPrint('Permission request failed: $e');
+    } finally {
+      // Always continue — a denied or failed permission must not strand the user.
+      if (mounted) {
+        setState(() => _isRequestingPermissions = false);
+        Navigator.of(context).pushReplacementNamed('/auth/phone');
+      }
     }
   }
 

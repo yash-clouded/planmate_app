@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:stream_chat_flutter/stream_chat_flutter.dart' hide PollOption;
 import '../theme/app_theme.dart';
@@ -31,6 +32,18 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   StreamSubscription<Event>? _messageSubscription;
   bool _isStreamReady = false;
 
+  /// The Stream channel cid the backend keys everything by, e.g. "messaging:goa-trip-abc".
+  String get _channelCid => 'messaging:${_group!.channelId}';
+
+  /// Remove a placeholder/message by its stable id, wherever it is in the list.
+  ///
+  /// Placeholders ("Processing…", "Building itinerary…") must be removed by id,
+  /// not "if it's the last message" — incoming Stream events can append after
+  /// them and otherwise strand them on screen forever.
+  void _removeMessageById(String id) {
+    _messages.removeWhere((m) => m.id == id);
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -62,7 +75,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     final count = await OfflineMessageQueue.instance.drain((msg) async {
       final channelId = msg['channel_id'] as String?;
       if (channelId == null || _group == null) return true;
-      if (channelId != 'messaging:${_group!.name}') return true;
+      if (channelId != _channelCid) return true;
       try {
         await BackendService.instance.sendAgentCommand(
           channelId: channelId,
@@ -84,7 +97,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   Future<void> _loadPolls() async {
     if (_group == null) return;
     try {
-      final channelId = 'messaging:${_group!.name}';
+      final channelId = _channelCid;
       final result = await BackendService.instance.getPolls(channelId);
       final polls = result['polls'] as List<dynamic>? ?? [];
       for (final poll in polls) {
@@ -118,14 +131,27 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   Future<void> _setupStreamChannel() async {
     if (_group == null) return;
     try {
-      final channelId = _group!.name;
-      final memberIds = _members.where((m) => !m.isAgent).map((m) => m.name).toList();
-      final currentUserId = StreamChatService.instance.client.state.currentUser?.id ?? 'current-user';
+      final firebaseUser = FirebaseAuth.instance.currentUser;
+      if (firebaseUser != null &&
+          StreamChatService.instance.client.state.currentUser?.id != firebaseUser.uid) {
+        await StreamChatService.instance.connectUser(
+          userId: firebaseUser.uid,
+          name: firebaseUser.displayName ?? firebaseUser.phoneNumber ?? 'User',
+        );
+      }
+
+      final currentUserId = StreamChatService.instance.client.state.currentUser?.id;
+      if (currentUserId == null) {
+        throw StateError('Stream user not connected');
+      }
+
+      final invitedNames = _members.where((m) => !m.isAgent).map((m) => m.name).toList();
       _streamChannel = await StreamChatService.instance.getOrCreateGroup(
-        groupId: channelId,
+        groupId: _group!.channelId,
         groupName: _group!.name,
         creatorId: currentUserId,
-        memberIds: memberIds,
+        addAgent: _group!.autoAddAgent,
+        invitedNames: invitedNames,
       );
 
       // Load existing messages
@@ -260,6 +286,15 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 _sendMessage();
               },
             ),
+            ListTile(
+              leading: const Icon(Icons.emergency_outlined, color: AppTheme.sosRed),
+              title: const Text('SOS Alert'),
+              subtitle: const Text('Send emergency SOS with your location'),
+              onTap: () {
+                Navigator.pop(ctx);
+                Navigator.of(context).pushNamed('/sos', arguments: _group);
+              },
+            ),
             const SizedBox(height: 16),
           ],
         ),
@@ -270,8 +305,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   Future<void> _generateItinerary() async {
     if (_group == null) return;
 
+    final placeholderId = 'itinerary-${DateTime.now().microsecondsSinceEpoch}';
     setState(() {
       _messages.add(_ChatMessage(
+        id: placeholderId,
         text: '',
         type: _MsgType.agent,
         time: _now(),
@@ -280,7 +317,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       ));
     });
 
-    final channelId = 'messaging:${_group!.name}';
+    final channelId = _channelCid;
     try {
       final result = await BackendService.instance.generateItinerary(
         channelId: channelId,
@@ -288,10 +325,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       );
 
       setState(() {
-        if (_messages.isNotEmpty &&
-            _messages.last.agentSummary == 'Building your itinerary...') {
-          _messages.removeLast();
-        }
+        _removeMessageById(placeholderId);
         _messages.add(_ChatMessage(
           text: result['title']?.toString() ?? 'Trip Plan',
           type: _MsgType.itinerary,
@@ -301,21 +335,16 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       });
     } catch (e) {
       setState(() {
-        if (_messages.isNotEmpty &&
-            _messages.last.agentSummary == 'Building your itinerary...') {
-          _messages.removeLast();
-        }
+        _removeMessageById(placeholderId);
         _messages.add(_ChatMessage(
           text: '',
           type: _MsgType.agent,
           time: _now(),
           agentSummary: 'Could not build itinerary',
-          agentDescription: e.toString().substring(0, 200),
+          agentDescription: _friendlyError(e),
         ));
       });
-      if (e.toString().contains('SocketException') ||
-          e.toString().contains('TimeoutException') ||
-          e.toString().contains('ClientException')) {
+      if (_isNetworkError(e)) {
         await OfflineMessageQueue.instance.enqueue({
           'type': 'itinerary',
           'channel_id': channelId,
@@ -367,20 +396,19 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     });
     _msgController.clear();
 
-    if (!_isStreamReady || _streamChannel == null) {
+    // Send to Stream channel (non-blocking). Record the returned message id so
+    // the echoed 'message.new' event doesn't render the message a second time.
+    if (_isStreamReady && _streamChannel != null) {
+      try {
+        final sent = await _streamChannel!.sendMessage(Message(text: text));
+        final sentId = sent.message.id;
+        _seenMessageIds.add(sentId);
+      } catch (e) {
+        debugPrint('Stream send failed: $e');
+      }
+    } else if (!_isStreamReady) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Connecting to chat... please wait')),
-      );
-      return;
-    }
-
-    // Send to Stream channel
-    try {
-      await _streamChannel!.sendMessage(Message(text: text));
-    } catch (e) {
-      debugPrint('Stream send failed: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Message send failed: ${e.toString().substring(0, 120)}')),
+        const SnackBar(content: Text('Chat is syncing... your message will be delivered shortly')),
       );
     }
 
@@ -404,31 +432,28 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   }
 
   Future<void> _handleAgentResponse(String userMessage, {String? command}) async {
-    // Show processing indicator
-    setState(() {
-      _messages.add(_ChatMessage(
-        text: '',
-        type: _MsgType.agent,
-        time: _now(),
-        agentSummary: 'Processing...',
-        agentDescription: 'Let me look into that for the group.',
-      ));
-    });
+    final channelId = _channelCid;
+
+    // Show processing indicator with a stable id so we can remove exactly it.
+    final placeholder = _ChatMessage(
+      text: '',
+      type: _MsgType.agent,
+      time: _now(),
+      agentSummary: 'Processing...',
+      agentDescription: 'Let me look into that for the group.',
+    );
+    final placeholderId = placeholder.id;
+    setState(() => _messages.add(placeholder));
 
     try {
-      final channelId = 'messaging:${_group!.name}';
       final result = await BackendService.instance.sendAgentCommand(
         channelId: channelId,
         command: command ?? 'chat',
         text: userMessage,
       );
 
-      // Remove the processing message
-      setState(() {
-        if (_messages.isNotEmpty && _messages.last.agentSummary == 'Processing...') {
-          _messages.removeLast();
-        }
-      });
+      // Remove the processing placeholder.
+      setState(() => _removeMessageById(placeholderId));
 
       // Add actual response
       final actionType = result['action_type'] ?? 'info_only';
@@ -451,33 +476,30 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         ));
       });
 
-      // Persist agent response to Stream
+      // Persist agent response to Stream so other members see it.
+      // Send as plain text (no @agent prefix) to avoid re-triggering the webhook.
       if (_isStreamReady && _streamChannel != null && agentText.isNotEmpty) {
         try {
-          await _streamChannel!.sendMessage(Message(text: '@agent $agentText'));
+          await _streamChannel!.sendMessage(Message(text: agentText));
         } catch (e) {
           debugPrint('Stream agent send failed: $e');
         }
       }
     } catch (e) {
       setState(() {
-        if (_messages.isNotEmpty && _messages.last.agentSummary == 'Processing...') {
-          _messages.removeLast();
-        }
+        _removeMessageById(placeholderId);
         _messages.add(_ChatMessage(
           text: '',
           type: _MsgType.agent,
           time: _now(),
           agentSummary: 'Sorry, I had trouble processing that.',
-          agentDescription: e.toString().substring(0, 200),
+          agentDescription: _friendlyError(e),
         ));
       });
       // Queue for retry if it looks like a network error
-      if (e.toString().contains('SocketException') ||
-          e.toString().contains('TimeoutException') ||
-          e.toString().contains('ClientException')) {
+      if (_isNetworkError(e)) {
         await OfflineMessageQueue.instance.enqueue({
-          'channel_id': 'messaging:${_group!.name}',
+          'channel_id': channelId,
           'command': command ?? 'chat',
           'text': userMessage,
         });
@@ -509,6 +531,22 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     final m = now.minute.toString().padLeft(2, '0');
     final ampm = now.hour >= 12 ? 'PM' : 'AM';
     return '$h:$m $ampm';
+  }
+
+  bool _isNetworkError(Object e) {
+    final s = e.toString();
+    return s.contains('SocketException') ||
+        s.contains('TimeoutException') ||
+        s.contains('ClientException');
+  }
+
+  /// Trim an error to a short, safe message (substring on a short string throws).
+  String _friendlyError(Object e) {
+    if (_isNetworkError(e)) {
+      return 'The server is waking up or offline. Your request will retry automatically.';
+    }
+    final s = e.toString();
+    return s.length > 200 ? s.substring(0, 200) : s;
   }
 
   @override
@@ -682,9 +720,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 showResult: false,
                 onVote: (index) async {
                   try {
-                    final channelId = 'messaging:${_group!.name}';
                     await BackendService.instance.castPollVote(
-                      channelId: channelId,
+                      channelId: _channelCid,
                       pollId: msg.pollId ?? '',
                       optionIndex: index,
                     );
@@ -1035,6 +1072,7 @@ class _ChatMember {
 enum _MsgType { system, user, otherUser, agent, itinerary }
 
 class _ChatMessage {
+  final String id;
   final String text;
   final _MsgType type;
   final String? time;
@@ -1047,7 +1085,8 @@ class _ChatMessage {
   final String? pollId;
   final Map<String, dynamic>? itineraryData;
 
-  const _ChatMessage({
+  _ChatMessage({
+    String? id,
     required this.text,
     required this.type,
     this.time,
@@ -1059,5 +1098,7 @@ class _ChatMessage {
     this.isPoll = false,
     this.pollId,
     this.itineraryData,
-  });
+  }) : id = id ?? 'local-${_localSeq++}';
+
+  static int _localSeq = 0;
 }

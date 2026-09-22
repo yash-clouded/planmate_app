@@ -45,93 +45,170 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
         ),
       );
       if (rationale != true) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Contacts permission denied — you can still add members manually.')),
-          );
+        final useManual = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: const Text('Add Member Manually'),
+            content: const Text('Contacts permission was denied. Do you want to add a member manually instead?'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+              ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Add Manually')),
+            ],
+          ),
+        );
+        if (useManual != true) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('No members added.')),
+            );
+          }
+          return;
         }
+        await _addMemberManually();
         return;
       }
       final requested = await Permission.contacts.request();
       if (!requested.isGranted) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Contacts permission denied')),
+            const SnackBar(content: Text('Contacts permission denied — add members manually instead.')),
           );
         }
+        await _addMemberManually();
         return;
       }
     }
 
-    final contacts = await FlutterContacts.getContacts(withProperties: true, withPhoto: true);
-    if (!mounted) return;
+    try {
+      final contacts = await FlutterContacts.getContacts(withProperties: true, withPhoto: true);
+      if (!mounted) return;
 
-    final selected = await showModalBottomSheet<Contact>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => Container(
-        decoration: const BoxDecoration(
-          color: AppTheme.surface,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      final selected = await showModalBottomSheet<Contact>(
+        context: context,
+        backgroundColor: Colors.transparent,
+        builder: (ctx) => Container(
+          decoration: const BoxDecoration(
+            color: AppTheme.surface,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                margin: const EdgeInsets.only(top: 12),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppTheme.border,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.all(20),
+                child: Text('Select Contact', style: AppTheme.titleLarge),
+              ),
+              SizedBox(
+                height: 400,
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: contacts.length,
+                  itemBuilder: (ctx, i) {
+                    final c = contacts[i];
+                    final displayName = c.displayName;
+                    final phone = c.phones.isNotEmpty ? c.phones.first.number : '';
+                    return ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: AppTheme.primary.withOpacity(0.1),
+                        backgroundImage: c.thumbnail != null ? MemoryImage(c.thumbnail!) : null,
+                        child: c.thumbnail == null
+                            ? Text(
+                                displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
+                                style: const TextStyle(fontWeight: FontWeight.w600),
+                              )
+                            : null,
+                      ),
+                      title: Text(displayName, style: AppTheme.bodyLarge),
+                      subtitle: Text(phone, style: AppTheme.bodySmall),
+                      onTap: () => Navigator.pop(ctx, c),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
         ),
-        child: Column(
+      );
+
+      if (selected != null) {
+        final name = selected.displayName.trim();
+        final phone = selected.phones.isNotEmpty ? selected.phones.first.number.replaceAll(RegExp(r'[^0-9+]'), '') : '';
+        if (name.isNotEmpty) {
+          setState(() {
+            _members.add(_MemberChip(name: name, phone: phone));
+          });
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to load contacts: ${e.toString().substring(0, 100)}')),
+        );
+      }
+      await _addMemberManually();
+    }
+  }
+
+  Future<void> _addMemberManually() async {
+    final nameController = TextEditingController();
+    final phoneController = TextEditingController();
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Add Member'),
+        content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              margin: const EdgeInsets.only(top: 12),
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: AppTheme.border,
-                borderRadius: BorderRadius.circular(2),
-              ),
+            TextField(
+              controller: nameController,
+              textCapitalization: TextCapitalization.words,
+              decoration: AppTheme.inputDecoration(hintText: 'Name'),
             ),
-            const Padding(
-              padding: EdgeInsets.all(20),
-              child: Text('Select Contact', style: AppTheme.titleLarge),
+            const SizedBox(height: 12),
+            TextField(
+              controller: phoneController,
+              keyboardType: TextInputType.phone,
+              decoration: AppTheme.inputDecoration(hintText: 'Phone number'),
             ),
-            SizedBox(
-              height: 400,
-              child: ListView.builder(
-                shrinkWrap: true,
-                itemCount: contacts.length,
-                itemBuilder: (ctx, i) {
-                  final c = contacts[i];
-                  final displayName = c.displayName;
-                  final phone = c.phones.isNotEmpty ? c.phones.first.number : '';
-                  return ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: AppTheme.primary.withOpacity(0.1),
-                      backgroundImage: c.thumbnail != null ? MemoryImage(c.thumbnail!) : null,
-                      child: c.thumbnail == null
-                          ? Text(
-                              displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
-                              style: const TextStyle(fontWeight: FontWeight.w600),
-                            )
-                          : null,
-                    ),
-                    title: Text(displayName, style: AppTheme.bodyLarge),
-                    subtitle: Text(phone, style: AppTheme.bodySmall),
-                    onTap: () => Navigator.pop(ctx, c),
-                  );
-                },
-              ),
-            ),
-            const SizedBox(height: 16),
           ],
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final name = nameController.text.trim();
+              final phone = phoneController.text.trim();
+              if (name.isNotEmpty) {
+                setState(() {
+                  _members.add(_MemberChip(
+                    name: name,
+                    phone: phone.isNotEmpty ? phone : '',
+                  ));
+                });
+              }
+              Navigator.pop(ctx);
+            },
+            style: AppTheme.primaryButtonStyle,
+            child: const Text('Add'),
+          ),
+        ],
       ),
     );
-
-    if (selected != null) {
-      final name = selected.displayName.trim();
-      final phone = selected.phones.isNotEmpty ? selected.phones.first.number.replaceAll(RegExp(r'[^0-9+]'), '') : '';
-      if (name.isNotEmpty) {
-        setState(() {
-          _members.add(_MemberChip(name: name, phone: phone));
-        });
-      }
-    }
   }
 
   @override
@@ -470,7 +547,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
       width: double.infinity,
       height: 52,
       child: ElevatedButton(
-        onPressed: () {
+        onPressed: () async {
           final name = _nameController.text.trim();
           if (name.isEmpty) {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -484,17 +561,17 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
 
           final memberNames = _members.map((m) => m.name).toList();
 
-          // Add to store
           final group = GroupData(
+            channelId: GroupData.generateChannelId(name),
             name: name,
             imagePath: _uploadedImageUrl,
             memberNames: memberNames,
             autoAddAgent: _autoAddAgent,
             creatorName: 'You',
           );
-          GroupStore.instance.addGroup(group);
+          await GroupStore.instance.addGroup(group);
 
-          // Navigate to that group's chat
+          if (!context.mounted) return;
           Navigator.of(context).pushReplacementNamed(
             '/group-chat',
             arguments: group,

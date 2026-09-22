@@ -84,13 +84,14 @@ async def stream_webhook(
         )
 
         # 2. Check for @agent mention
-        if "@agent" in msg.text.lower() or "@planmate" in msg.text.lower():
-            logger.info(f"@agent mentioned in {msg.cid}: {msg.text[:80]}...")
+        text = msg.text or ""
+        if "@agent" in text.lower() or "@planmate" in text.lower():
+            logger.info(f"@agent mentioned in {msg.cid}: {text[:80]}...")
 
             try:
                 result = await process_mention(
                     channel_id=msg.cid,
-                    mention_text=msg.text,
+                    mention_text=text,
                 )
 
                 action_type = result.get("action_type", "info_only")
@@ -278,6 +279,10 @@ async def get_polls(channel_id: str):
     """
     Get all active polls for a channel.
     """
+    return await _get_polls_impl(channel_id)
+
+
+async def _get_polls_impl(channel_id: str):
     try:
         polls = await redis_store.get_polls(channel_id)
         return {"polls": polls}
@@ -329,58 +334,71 @@ async def generate_itinerary(request: Request):
         raise HTTPException(status_code=400, detail="channel_id required")
 
     try:
-        recent = await redis_store.get_recent_messages(channel_id, limit=50)
+        recent = await redis_store.get_recent_messages(channel_id, limit=10)
         context_str = "\n".join(
-            f"[{m.get('user_name', m.get('user_id', '?'))}]: {m['text']}"
+            f"{m.get('user_name', m.get('user_id', 'user'))}: {m['text']}"
             for m in recent
         )
 
-        itinerary_prompt = f"""Generate a {days}-day trip itinerary based on this conversation:
-
+        itinerary_prompt = f"""Generate a {days}-day itinerary as JSON from this chat:
 {context_str}
 
-Format as JSON:
+JSON schema:
 {{
   "title": "Trip Title",
   "days": [
     {{
       "day": 1,
-      "theme": "Day 1 theme",
+      "theme": "Theme",
       "activities": [
-        {{"time": "9:00 AM", "activity": "Activity description", "location": "Place name"}}
+        {{"time": "10:00 AM", "activity": "Activity", "location": "Location"}}
       ]
     }}
   ]
 }}"""
 
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.post(
-                f"{settings.nvidia_base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.nvidia_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": settings.nvidia_model,
-                    "messages": [
-                        {"role": "system", "content": "You are a trip planner. Generate detailed itineraries in JSON format only."},
-                        {"role": "user", "content": itinerary_prompt},
-                    ],
-                    "temperature": 0.5,
-                    "max_tokens": 2048,
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
+        models_to_try = [
+            settings.nvidia_model or "deepseek-ai/deepseek-v4.1-flash",
+        ]
 
-        content = data["choices"][0]["message"].get("content", "")
+        content = ""
+        for model_name in models_to_try:
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    response = await client.post(
+                        f"{settings.nvidia_base_url}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {settings.nvidia_api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": model_name,
+                            "messages": [
+                                {"role": "system", "content": "Trip planner. Output valid JSON only."},
+                                {"role": "user", "content": itinerary_prompt},
+                            ],
+                            "temperature": 0.3,
+                            "max_tokens": 450,
+                        },
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+                        content = data["choices"][0]["message"].get("content", "")
+                        if content:
+                            break
+            except Exception as ex:
+                logger.warning(f"Itinerary generation model {model_name} failed: {ex}")
+                continue
+
         try:
             if "```json" in content:
                 json_str = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                json_str = content.split("```")[1].split("```")[0].strip()
             else:
                 start = content.find("{")
                 end = content.rfind("}") + 1
-                json_str = content[start:end] if start >= 0 else content
+                json_str = content[start:end] if (start >= 0 and end > start) else content
             itinerary = json.loads(json_str)
         except Exception:
             itinerary = {
@@ -389,7 +407,7 @@ Format as JSON:
                     {
                         "day": i + 1,
                         "theme": f"Day {i + 1}",
-                        "activities": [{"time": "TBD", "activity": "Plan activities", "location": "TBD"}],
+                        "activities": [{"time": "10:00 AM", "activity": "Explore & Sightseeing", "location": "City Center"}],
                     }
                     for i in range(days)
                 ],

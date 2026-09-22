@@ -1,5 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../theme/app_theme.dart';
+import '../services/backend_service.dart';
+import 'chat_list_screen.dart';
 
 class SosScreen extends StatefulWidget {
   const SosScreen({super.key});
@@ -12,7 +17,9 @@ class _SosScreenState extends State<SosScreen>
     with SingleTickerProviderStateMixin {
   bool _isHolding = false;
   double _holdProgress = 0;
+  bool _isSending = false;
   late AnimationController _pulseController;
+  GroupData? _group;
 
   final _contacts = [
     _EmergencyContact(name: 'Mom', number: '+91 98765 43210'),
@@ -27,6 +34,15 @@ class _SosScreenState extends State<SosScreen>
       vsync: this,
       duration: const Duration(milliseconds: 1200),
     )..repeat(reverse: true);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final args = ModalRoute.of(context)?.settings.arguments;
+    if (args is GroupData) {
+      _group = args;
+    }
   }
 
   @override
@@ -47,28 +63,28 @@ class _SosScreenState extends State<SosScreen>
           onPressed: () => Navigator.of(context).pop(),
         ),
         title: const Text('SOS'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.info_outline, size: 22),
-            onPressed: () {},
-          ),
-        ],
       ),
       body: Column(
         children: [
           const SizedBox(height: 40),
-          // SOS button
           _buildSosButton(),
           const SizedBox(height: 16),
           Text(
-            _isHolding ? 'Hold to send SOS...' : 'Tap and hold to send SOS',
+            _isSending
+                ? 'Sending SOS...'
+                : _isHolding
+                    ? 'Hold to send SOS...'
+                    : 'Tap and hold to send SOS',
             style: AppTheme.bodyMedium.copyWith(
-              color: _isHolding ? AppTheme.sosRed : AppTheme.textSecondary,
-              fontWeight: _isHolding ? FontWeight.w600 : FontWeight.w400,
+              color: _isSending
+                  ? AppTheme.warning
+                  : _isHolding
+                      ? AppTheme.sosRed
+                      : AppTheme.textSecondary,
+              fontWeight: _isHolding || _isSending ? FontWeight.w600 : FontWeight.w400,
             ),
           ),
           const SizedBox(height: 40),
-          // Emergency contacts
           Expanded(
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -80,7 +96,7 @@ class _SosScreenState extends State<SosScreen>
                       const Text('Emergency Contacts', style: AppTheme.titleMedium),
                       const Spacer(),
                       GestureDetector(
-                        onTap: () {},
+                        onTap: () => Navigator.of(context).pushNamed('/settings/emergency'),
                         child: Text(
                           'Edit',
                           style: AppTheme.bodyMedium.copyWith(
@@ -94,9 +110,8 @@ class _SosScreenState extends State<SosScreen>
                   const SizedBox(height: 12),
                   ..._contacts.map((c) => _buildContactTile(c)),
                   const SizedBox(height: 8),
-                  // Add contact
                   InkWell(
-                    onTap: () {},
+                    onTap: () => Navigator.of(context).pushNamed('/settings/emergency'),
                     borderRadius: BorderRadius.circular(12),
                     child: Container(
                       padding: const EdgeInsets.all(14),
@@ -127,7 +142,6 @@ class _SosScreenState extends State<SosScreen>
               ),
             ),
           ),
-          // Status banner
           _buildStatusBanner(),
         ],
       ),
@@ -137,7 +151,7 @@ class _SosScreenState extends State<SosScreen>
   Widget _buildSosButton() {
     return Center(
       child: GestureDetector(
-        onLongPressStart: (_) {
+        onLongPressStart: _isSending ? null : (_) {
           setState(() => _isHolding = true);
           _startHoldProgress();
         },
@@ -164,7 +178,6 @@ class _SosScreenState extends State<SosScreen>
               child: Stack(
                 alignment: Alignment.center,
                 children: [
-                  // Progress ring
                   SizedBox(
                     width: 150,
                     height: 150,
@@ -177,7 +190,6 @@ class _SosScreenState extends State<SosScreen>
                       ),
                     ),
                   ),
-                  // Main button
                   Container(
                     width: 110,
                     height: 110,
@@ -192,16 +204,25 @@ class _SosScreenState extends State<SosScreen>
                         ),
                       ],
                     ),
-                    child: const Center(
-                      child: Text(
-                        'SOS',
-                        style: TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.w900,
-                          color: Colors.white,
-                          letterSpacing: 2,
-                        ),
-                      ),
+                    child: Center(
+                      child: _isSending
+                          ? const SizedBox(
+                              width: 28,
+                              height: 28,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 3,
+                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                              ),
+                            )
+                          : const Text(
+                              'SOS',
+                              style: TextStyle(
+                                fontSize: 28,
+                                fontWeight: FontWeight.w900,
+                                color: Colors.white,
+                                letterSpacing: 2,
+                              ),
+                            ),
                     ),
                   ),
                 ],
@@ -224,19 +245,83 @@ class _SosScreenState extends State<SosScreen>
     }
   }
 
-  void _triggerSos() {
+  Future<void> _triggerSos() async {
     setState(() {
       _isHolding = false;
       _holdProgress = 0;
+      _isSending = true;
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: const Text('SOS sent! Emergency contacts notified.'),
-        backgroundColor: AppTheme.sosRed,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      ),
-    );
+
+    try {
+      // Check and request location permission
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          _showError('Location permission denied. Cannot send SOS without location.');
+          return;
+        }
+      }
+      if (permission == LocationPermission.deniedForever) {
+        _showError('Location permission permanently denied. Please enable in settings.');
+        return;
+      }
+
+      // Get current position
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 10),
+        ),
+      );
+
+      final user = FirebaseAuth.instance.currentUser;
+      final userName = user?.displayName ?? user?.phoneNumber ?? 'Unknown User';
+      final channelId = _group?.channelId;
+
+      if (channelId == null) {
+        _showError('No group selected. Open a group chat first to use SOS.');
+        return;
+      }
+
+      await BackendService.instance.sendSosAlert(
+        channelId: channelId,
+        userId: user?.uid ?? 'unknown',
+        userName: userName,
+        latitude: position.latitude,
+        longitude: position.longitude,
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('SOS sent! Emergency contacts notified with your location.'),
+            backgroundColor: AppTheme.sosRed,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        );
+      }
+    } catch (e) {
+      _showError('Failed to send SOS: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isSending = false);
+      }
+    }
+  }
+
+  void _showError(String message) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      );
+    }
   }
 
   Widget _buildContactTile(_EmergencyContact contact) {
@@ -280,7 +365,12 @@ class _SosScreenState extends State<SosScreen>
             ),
           ),
           IconButton(
-            onPressed: () {},
+            onPressed: () async {
+              final uri = Uri.parse('tel:${contact.number.replaceAll(' ', '')}');
+              if (await canLaunchUrl(uri)) {
+                await launchUrl(uri);
+              }
+            },
             icon: const Icon(Icons.phone, color: AppTheme.success, size: 20),
           ),
         ],
@@ -298,30 +388,41 @@ class _SosScreenState extends State<SosScreen>
         MediaQuery.of(context).padding.bottom + 14,
       ),
       decoration: BoxDecoration(
-        color: AppTheme.success.withOpacity(0.08),
-        border: const Border(
-          top: BorderSide(color: AppTheme.success, width: 0.5),
+        color: _group != null
+            ? AppTheme.success.withOpacity(0.08)
+            : AppTheme.warning.withOpacity(0.08),
+        border: Border(
+          top: BorderSide(
+            color: _group != null ? AppTheme.success : AppTheme.warning,
+            width: 0.5,
+          ),
         ),
       ),
       child: Row(
         children: [
-          const Icon(Icons.check_circle, color: AppTheme.success, size: 20),
+          Icon(
+            _group != null ? Icons.check_circle : Icons.warning_amber,
+            color: _group != null ? AppTheme.success : AppTheme.warning,
+            size: 20,
+          ),
           const SizedBox(width: 10),
-          const Expanded(
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Ready to send SOS',
+                  _group != null ? 'Ready to send SOS' : 'No group selected',
                   style: TextStyle(
                     fontWeight: FontWeight.w600,
-                    color: AppTheme.success,
+                    color: _group != null ? AppTheme.success : AppTheme.warning,
                     fontSize: 13,
                   ),
                 ),
                 Text(
-                  'Your location will be shared with contacts',
-                  style: TextStyle(
+                  _group != null
+                      ? 'Your location will be shared with ${_group!.name}'
+                      : 'Open a group chat to use SOS',
+                  style: const TextStyle(
                     color: AppTheme.textSecondary,
                     fontSize: 11,
                   ),

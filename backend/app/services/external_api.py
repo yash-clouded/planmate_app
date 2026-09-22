@@ -150,20 +150,25 @@ class ExternalApiService:
 
         return self._mock_hotels(location, budget)
 
-    def _mock_hotels(self, location: str, budget: int) -> dict:
+    def _mock_hotels(self, location: str, budget: Any) -> dict:
         """Fallback mock hotels."""
+        try:
+            numeric_budget = int(float(budget))
+        except (ValueError, TypeError):
+            numeric_budget = 3000
+
         return {
             "results": [
                 {
                     "name": f"Hotel {location} View",
-                    "price": budget,
+                    "price": numeric_budget,
                     "image_url": "",
-                    "details": f"2 nights, AC, WiFi",
+                    "details": "2 nights, AC, WiFi",
                     "rating": 4.2,
                 },
                 {
                     "name": f"{location} Grand Resort",
-                    "price": int(budget * 1.3),
+                    "price": int(numeric_budget * 1.3),
                     "image_url": "",
                     "details": "2 nights, breakfast included",
                     "rating": 4.5,

@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:provider/provider.dart';
 import '../theme/app_theme.dart';
+import '../services/auth_service.dart';
+import '../services/stream_service.dart';
 
 class ProfileSettingsScreen extends StatelessWidget {
   const ProfileSettingsScreen({super.key});
@@ -71,6 +75,11 @@ class ProfileSettingsScreen extends StatelessWidget {
   }
 
   Widget _buildProfileHeader(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+    final displayName = user?.displayName ?? 'You';
+    final phone = user?.phoneNumber ?? '';
+    final photoUrl = user?.photoURL;
+
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: AppTheme.cardDecoration,
@@ -83,18 +92,22 @@ class ProfileSettingsScreen extends StatelessWidget {
               color: AppTheme.primary.withOpacity(0.1),
               shape: BoxShape.circle,
             ),
-            child: const Icon(Icons.person, color: AppTheme.primary, size: 28),
+            child: photoUrl != null && photoUrl.isNotEmpty
+                ? ClipOval(
+                    child: Image.network(photoUrl, width: 56, height: 56, fit: BoxFit.cover),
+                  )
+                : const Icon(Icons.person, color: AppTheme.primary, size: 28),
           ),
           const SizedBox(width: 16),
-          const Expanded(
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('You', style: AppTheme.titleLarge),
-                SizedBox(height: 2),
+                Text(displayName, style: AppTheme.titleLarge),
+                const SizedBox(height: 2),
                 Text(
-                  'Tap to edit profile',
-                  style: TextStyle(
+                  phone.isNotEmpty ? phone : 'Tap to edit profile',
+                  style: const TextStyle(
                     fontSize: 13,
                     color: AppTheme.textSecondary,
                   ),
@@ -185,13 +198,19 @@ class ProfileSettingsScreen extends StatelessWidget {
                   child: const Text('Cancel'),
                 ),
                 TextButton(
-                  onPressed: () {
+                  onPressed: () async {
                     Navigator.pop(ctx); // close dialog
-                    // Navigate to login and clear the entire stack
-                    Navigator.of(context).pushNamedAndRemoveUntil(
-                      '/',
-                      (route) => false,
-                    );
+                    final authService = Provider.of<AuthService>(context, listen: false);
+                    try {
+                      await StreamChatService.instance.disconnectUser();
+                    } catch (_) {}
+                    await authService.signOut();
+                    if (context.mounted) {
+                      Navigator.of(context).pushNamedAndRemoveUntil(
+                        '/',
+                        (route) => false,
+                      );
+                    }
                   },
                   child: const Text(
                     'Log Out',

@@ -1,4 +1,7 @@
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import 'package:stream_chat_flutter/stream_chat_flutter.dart';
+import 'package:stream_chat_persistence/stream_chat_persistence.dart';
 import 'api_config.dart';
 
 /// Wraps the Stream Chat client lifecycle.
@@ -9,24 +12,60 @@ class StreamChatService {
   late final StreamChatClient client;
 
   /// Initialize the Stream Chat client.
-  void init() {
+  Future<void> init() async {
+    final chatPersistentClient = StreamChatPersistenceClient(
+      logLevel: Level.SEVERE,
+      connectionMode: ConnectionMode.regular,
+    );
+
     client = StreamChatClient(
       ApiConfig.streamApiKey,
       logLevel: Level.INFO,
     );
+
+    // Set the persistent client on the chat client
+    client.chatPersistenceClient = chatPersistentClient;
   }
 
-  /// Connect a user to Stream Chat.
+  /// Fetch a real Stream connection token from the backend for [userId].
+  ///
+  /// The backend upserts the Stream user and signs a JWT with the API secret.
+  /// Falls back to a dev token only if the backend is unreachable, so the app
+  /// still works in local/dev setups where Stream auth is disabled.
+  Future<String> _fetchToken({required String userId, required String name}) async {
+    try {
+      final resp = await http
+          .post(
+            Uri.parse('${ApiConfig.backendUrl}/stream/token'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'user_id': userId, 'name': name}),
+          )
+          .timeout(const Duration(seconds: 30));
+      if (resp.statusCode == 200) {
+        final data = jsonDecode(resp.body) as Map<String, dynamic>;
+        final token = data['token'] as String?;
+        if (token != null && token.isNotEmpty) return token;
+      }
+    } catch (_) {
+      // Fall through to dev token below.
+    }
+    return client.devToken(userId).rawValue;
+  }
+
+  /// Connect a user to Stream Chat, minting a token from the backend.
   Future<void> connectUser({
     required String userId,
     required String name,
     String? token,
   }) async {
-    final devToken = token ?? client.devToken(userId).rawValue;
+    // Already connected as this user? No-op.
+    if (client.state.currentUser?.id == userId) return;
+
+    final authToken = token ?? await _fetchToken(userId: userId, name: name);
 
     await client.connectUser(
       User(id: userId, name: name),
-      devToken,
+      authToken,
     );
   }
 
@@ -36,32 +75,36 @@ class StreamChatService {
   }
 
   /// Get or create a group channel with the AI agent auto-added.
+  ///
+  /// [groupId] must be a valid Stream channel id (see GroupData.generateChannelId).
+  /// Only real Stream user ids are added as members (the creator + the agent);
+  /// invited contacts are kept as display metadata in [invitedNames] until a
+  /// real invite→uid mapping exists.
   Future<Channel> getOrCreateGroup({
     required String groupId,
     required String groupName,
     required String creatorId,
-    List<String> memberIds = const [],
+    bool addAgent = true,
+    List<String> invitedNames = const [],
   }) async {
-    final allMembers = [
+    final members = [
       creatorId,
-      'planmate-agent',
-      ...memberIds,
+      if (addAgent) 'planmate-agent',
     ];
 
-    final channel = client.channel(
+    // watchChannel creates the channel on first call and passes members correctly.
+    await client.watchChannel(
       'messaging',
-      id: groupId,
-      extraData: {
+      channelId: groupId,
+      channelData: {
         'name': groupName,
         'created_by_id': creatorId,
-        'members': allMembers,
+        'invited_names': invitedNames,
+        'members': members,
       },
     );
 
-    await channel.create();
-    await channel.watch();
-
-    return channel;
+    return client.channel('messaging', id: groupId);
   }
 
   /// Send a text message to a channel.
@@ -90,7 +133,7 @@ class StreamChatService {
     final userId = client.state.currentUser!.id;
     return client.queryChannels(
       filter: Filter.in_('members', [userId]),
-      channelStateSort: [SortOption('last_message_at')],
+      channelStateSort: [SortOption.desc('last_message_at')],
     );
   }
 
@@ -99,7 +142,7 @@ class StreamChatService {
     final userId = client.state.currentUser!.id;
     return client.queryChannelsOnline(
       filter: Filter.in_('members', [userId]),
-      sort: [SortOption('last_message_at')],
+      sort: [SortOption.desc('last_message_at')],
       paginationParams: const PaginationParams(limit: 30),
     );
   }

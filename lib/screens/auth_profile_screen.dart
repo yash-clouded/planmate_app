@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
@@ -84,8 +85,21 @@ class _AuthProfileScreenState extends State<AuthProfileScreen> {
                     width: double.infinity,
                     height: 52,
                     child: ElevatedButton(
-                      onPressed: _isValid ? () {
-                        Navigator.of(context).pushReplacementNamed('/home');
+                      onPressed: _isValid ? () async {
+                        final user = FirebaseAuth.instance.currentUser;
+                        if (user != null) {
+                          final name = _nameController.text.trim();
+                          if (name.isNotEmpty) {
+                            await user.updateDisplayName(name);
+                          }
+                          if (_uploadedImageUrl != null) {
+                            await user.updatePhotoURL(_uploadedImageUrl);
+                          }
+                          await user.reload();
+                        }
+                        if (mounted) {
+                          Navigator.of(context).pushReplacementNamed('/home');
+                        }
                       } : null,
                       style: AppTheme.primaryButtonStyle.copyWith(
                         backgroundColor: WidgetStateProperty.resolveWith((states) {

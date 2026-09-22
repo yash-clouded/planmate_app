@@ -5,10 +5,10 @@ from typing import Optional
 class WebhookMessage(BaseModel):
     """Incoming message from Stream Chat webhook."""
     cid: str  # channel ID, e.g. "messaging:group-123"
-    message_id: str
-    user_id: str
-    text: str
-    created_at: str
+    message_id: str = ""
+    user_id: str = ""
+    text: str = ""
+    created_at: str = ""
 
 
 class WebhookPayload(BaseModel):

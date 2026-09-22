@@ -8,6 +8,7 @@ payment link generation).
 
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -18,57 +19,36 @@ from app.services import redis_store
 
 logger = logging.getLogger(__name__)
 
-AGENT_SYSTEM_PROMPT = """You are PlanMate, an AI agent for trip planning ONLY.
-Your ONLY job is to help the group plan trips, outings, travel, hotels, restaurants, movies, and bookings.
-You MUST refuse to answer anything unrelated to trip/event planning.
-If the user asks about politics, coding, personal advice, or anything else, say: "I only help with trip planning. Ask me about destinations, hotels, restaurants, or bookings!"
-
-RULES:
-1. Read the recent conversation and extract what the group has decided.
-2. Identify: activity type, date/time, location, budget, headcount.
-3. If key info is missing, ask the group ONE clear question.
-4. If you have enough info, present 2-3 concrete options as structured tool calls.
-5. NEVER book or pay without explicit group confirmation.
-6. Keep responses short and actionable.
-
-COMMANDS:
-- If user explicitly says "poll" or "create poll", call create_poll tool and ONLY return the poll.
-- If user says "summarize", give a concise trip summary.
-- If user says "restaurants", call search_restaurants and return results.
-
-AVAILABLE TOOLS:
-- search_hotels: search hotels near a location for given dates
-- search_movies: search movie showtimes for a given date
-- search_restaurants: search restaurants for a cuisine and budget
-- generate_payment_link: generate a UPI/payment link for a booking
-- create_poll: create a group poll for a decision
-
-Respond with a JSON object:
+AGENT_SYSTEM_PROMPT = """PlanMate: AI trip & event planner for groups.
+Output JSON only:
 {
-  "summary": "short summary",
-  "description": "additional context",
+  "summary": "1-sentence summary or response",
+  "description": "brief details or clarifying question",
   "intent": "trip|movie|dinner|other",
   "needs_confirmation": false,
-  "action_type": "booking_search|info_only|poll",
+  "action_type": "booking_search|info_only|poll|rejected",
   "tool_calls": [{"tool": "tool_name", "params": {...}}]
 }
-
-If the user asks about non-trip topics, set action_type="rejected", summary="I only help with trip planning. Ask me about destinations, hotels, restaurants, or bookings!", and tool_calls=[]."""
+Rules:
+- Keep responses short, concise, and actionable.
+- If essential info is missing, ask 1 clear question.
+- For unrelated topics (politics, coding, personal), set action_type="rejected", summary="I only help with trip, hotel, restaurant, and event planning."
+"""
 
 TOOLS = [
     {
         "type": "function",
         "function": {
             "name": "search_hotels",
-            "description": "Search for hotels near a location for given dates",
+            "description": "Search hotels near a location for dates",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "location": {"type": "string", "description": "City or area name"},
-                    "check_in": {"type": "string", "description": "Check-in date (YYYY-MM-DD)"},
-                    "check_out": {"type": "string", "description": "Check-out date (YYYY-MM-DD)"},
-                    "budget_per_night": {"type": "number", "description": "Max budget per night in INR"},
-                    "num_rooms": {"type": "integer", "description": "Number of rooms needed"},
+                    "location": {"type": "string"},
+                    "check_in": {"type": "string", "description": "YYYY-MM-DD"},
+                    "check_out": {"type": "string", "description": "YYYY-MM-DD"},
+                    "budget_per_night": {"type": "number"},
+                    "num_rooms": {"type": "integer"},
                 },
                 "required": ["location", "check_in", "check_out"],
             },
@@ -78,13 +58,13 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "search_movies",
-            "description": "Search for movie showtimes at nearby theaters",
+            "description": "Search movie showtimes",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "city": {"type": "string", "description": "City name"},
-                    "date": {"type": "string", "description": "Show date (YYYY-MM-DD)"},
-                    "genre": {"type": "string", "description": "Preferred genre if any"},
+                    "city": {"type": "string"},
+                    "date": {"type": "string", "description": "YYYY-MM-DD"},
+                    "genre": {"type": "string"},
                 },
                 "required": ["city", "date"],
             },
@@ -94,14 +74,14 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "search_restaurants",
-            "description": "Search for restaurants matching criteria",
+            "description": "Search restaurants by area and cuisine",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "location": {"type": "string", "description": "Area or city"},
-                    "cuisine": {"type": "string", "description": "Cuisine type"},
-                    "budget": {"type": "string", "description": "Budget range: budget|mid|premium"},
-                    "headcount": {"type": "integer", "description": "Number of people"},
+                    "location": {"type": "string"},
+                    "cuisine": {"type": "string"},
+                    "budget": {"type": "string", "description": "budget|mid|premium"},
+                    "headcount": {"type": "integer"},
                 },
                 "required": ["location"],
             },
@@ -111,13 +91,13 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "generate_payment_link",
-            "description": "Generate a payment link for a booking",
+            "description": "Generate payment/UPI link for booking",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "amount": {"type": "number", "description": "Total amount in INR"},
-                    "description": {"type": "string", "description": "Payment description"},
-                    "split_count": {"type": "integer", "description": "Split among N people"},
+                    "amount": {"type": "number"},
+                    "description": {"type": "string"},
+                    "split_count": {"type": "integer"},
                 },
                 "required": ["amount", "description"],
             },
@@ -127,20 +107,13 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "create_poll",
-            "description": "Create a group poll for a decision",
+            "description": "Create a group decision poll",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "question": {"type": "string", "description": "The poll question"},
-                    "options": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Poll option strings",
-                    },
-                    "duration_minutes": {
-                        "type": "integer",
-                        "description": "Poll duration in minutes (default 60)",
-                    },
+                    "question": {"type": "string"},
+                    "options": {"type": "array", "items": {"type": "string"}},
+                    "duration_minutes": {"type": "integer"},
                 },
                 "required": ["question", "options"],
             },
@@ -221,7 +194,18 @@ async def _handle_poll_command(channel_id: str, text: str) -> dict[str, Any]:
         "intent": "other",
         "needs_confirmation": False,
         "action_type": "poll",
+        # tool_calls: consumed by the Stream webhook path to post a poll card.
+        # tool_results: consumed by the direct-command frontend, which renders
+        # the poll card from result['tool_results'] (same {tool, params} shape).
         "tool_calls": [{
+            "tool": "create_poll",
+            "params": {
+                "question": question,
+                "options": options,
+                "duration_minutes": 60,
+            }
+        }],
+        "tool_results": [{
             "tool": "create_poll",
             "params": {
                 "question": question,
@@ -234,39 +218,33 @@ async def _handle_poll_command(channel_id: str, text: str) -> dict[str, Any]:
 
 
 async def _handle_summarize_command(channel_id: str) -> dict[str, Any]:
-    """Handle summarize command - summarize recent conversation."""
-    recent = await redis_store.get_recent_messages(channel_id, limit=50)
+    """Handle summarize command - summarize recent conversation with minimal tokens."""
+    recent = await redis_store.get_recent_messages(channel_id, limit=8)
     if not recent:
         return {
             "summary": "No messages to summarize yet.",
-            "description": "Start chatting and I'll summarize the conversation.",
+            "description": "Start chatting and I'll summarize the group's decisions.",
             "intent": "other",
             "needs_confirmation": False,
             "action_type": "info_only",
             "tool_calls": [],
         }
-    
+
     context_str = "\n".join(
-        f"[{m.get('user_name', m.get('user_id', '?'))}]: {m['text']}"
+        f"{m.get('user_name', m.get('user_id', 'user'))}: {m['text']}"
         for m in recent
     )
-    
-    # Use AI to summarize
-    summary_prompt = f"""Summarize this trip planning conversation in 2-3 sentences. Focus on what has been decided: activity, date, location, budget, headcount.
 
-Conversation:
-{context_str}
+    summary_prompt = f"Summarize decisions (activity, date, location, budget, headcount) in 2 short sentences:\n{context_str}"
 
-Summary:"""
-    
     try:
         ai_result = await _call_ai(summary_prompt)
-        summary_text = ai_result.get("summary", "Unable to generate summary.")
+        summary_text = ai_result.get("summary", "Summary unavailable.")
     except Exception:
-        summary_text = f"This group has {len(recent)} recent messages about planning."
-    
+        summary_text = f"The group has {len(recent)} recent messages."
+
     return {
-        "summary": "Conversation Summary",
+        "summary": "Trip Summary",
         "description": summary_text,
         "intent": "other",
         "needs_confirmation": False,
@@ -277,17 +255,16 @@ Summary:"""
 
 async def _handle_restaurants_command(channel_id: str, text: str) -> dict[str, Any]:
     """Handle restaurants command."""
-    # Extract location from text
     location = "the area"
     lower = text.lower()
     for prefix in ["restaurants in", "restaurant in", "restaurants near", "restaurant near"]:
         if lower.startswith(prefix):
             location = text[len(prefix):].strip()
             break
-    
+
     return {
         "summary": f"Restaurants in {location}",
-        "description": "Here are some good options for the group:",
+        "description": "Here are top options for the group:",
         "intent": "dinner",
         "needs_confirmation": True,
         "action_type": "booking_search",
@@ -304,15 +281,16 @@ async def _handle_restaurants_command(channel_id: str, text: str) -> dict[str, A
 
 
 async def _process_general_mention(channel_id: str, mention_text: str) -> dict[str, Any]:
-    """Process a general @agent mention."""
-    # 1. Fetch recent messages from Redis
-    recent = await redis_store.get_recent_messages(channel_id, limit=50)
-    context_str = "\n".join(
-        f"[{m.get('user_name', m.get('user_id', '?'))}]: {m['text']}"
+    """Process a general @agent mention with minimal token context."""
+    # 1. Fetch recent messages from Redis (last 6 messages to minimize token usage)
+    recent = await redis_store.get_recent_messages(channel_id, limit=6)
+    context_lines = [
+        f"{m.get('user_name', m.get('user_id', 'user'))}: {m['text']}"
         for m in recent
-    )
+    ]
+    context_str = "\n".join(context_lines)
 
-    user_message = f"""Recent group chat:\n{context_str}\n\n---\nThe user just tagged you with: {mention_text}\n\nAnalyze the conversation and respond. ONLY help with trip planning."""
+    user_message = f"Chat:\n{context_str}\n\nUser request: {mention_text}"
 
     # 2. Call NVIDIA NIM API
     agent_reply = await _call_ai(user_message)
@@ -343,88 +321,103 @@ async def _process_general_mention(channel_id: str, mention_text: str) -> dict[s
 
 
 async def _call_ai(user_message: str) -> dict[str, Any]:
-    """Call NVIDIA NIM (OpenAI-compatible) API with tool definitions."""
-    try:
-        url = f"{settings.nvidia_base_url}/chat/completions"
-        payload = {
-            "model": settings.nvidia_model,
-            "messages": [
-                {"role": "system", "content": AGENT_SYSTEM_PROMPT},
-                {"role": "user", "content": user_message},
-            ],
-            "tools": TOOLS,
-            "tool_choice": "auto",
-            "temperature": 0.3,
-            "max_tokens": 1024,
-        }
-        logger.info(f"Calling NVIDIA API: url={url} model={settings.nvidia_model} key_set={bool(settings.nvidia_api_key)}")
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.post(
-                url,
-                headers={
-                    "Authorization": f"Bearer {settings.nvidia_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
-            logger.info(f"NVIDIA API response status: {response.status_code}")
-            if response.status_code != 200:
-                logger.error(f"NVIDIA API error body: {response.text[:500]}")
-            response.raise_for_status()
-            data = response.json()
+    """Call NVIDIA NIM (OpenAI-compatible) API with model fallback and token budget."""
+    models_to_try = [
+        settings.nvidia_model or "deepseek-ai/deepseek-v4.1-flash",
+    ]
 
-        content = data["choices"][0]["message"]
-        raw_text = content.get("content", "")
-
-        # Try to parse structured JSON from the response
+    last_error = None
+    for model_name in models_to_try:
         try:
-            if "```json" in raw_text:
-                json_str = raw_text.split("```json")[1].split("```")[0].strip()
-            elif "```" in raw_text:
-                json_str = raw_text.split("```")[1].split("```")[0].strip()
-            else:
-                start = raw_text.find("{")
-                end = raw_text.rfind("}") + 1
-                if start >= 0 and end > start:
-                    json_str = raw_text[start:end]
-                else:
-                    json_str = raw_text
-
-            parsed = json.loads(json_str)
-        except (json.JSONDecodeError, IndexError):
-            parsed = {
-                "summary": raw_text[:200] if raw_text else "Let me look into that for the group.",
-                "description": "",
-                "intent": "other",
-                "needs_confirmation": False,
-                "action_type": "info_only",
-                "tool_calls": [],
+            url = f"{settings.nvidia_base_url}/chat/completions"
+            payload = {
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": AGENT_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_message},
+                ],
+                "tools": TOOLS,
+                "tool_choice": "auto",
+                "temperature": 0.2,
+                "max_tokens": 250,
             }
+            logger.info(f"Calling NVIDIA API: model={model_name}")
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.post(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {settings.nvidia_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+                if response.status_code != 200:
+                    logger.warning(f"Model {model_name} returned {response.status_code}: {response.text[:200]}")
+                    last_error = response.text
+                    continue
 
-        # Also extract tool calls from the API response if present
-        api_tool_calls = content.get("tool_calls", [])
-        if api_tool_calls and not parsed.get("tool_calls"):
-            parsed["tool_calls"] = [
-                {
-                    "tool": tc["function"]["name"],
-                    "params": json.loads(tc["function"].get("arguments", "{}")),
+                data = response.json()
+
+            content = data["choices"][0]["message"]
+            raw_text = content.get("content") or ""
+            api_tool_calls = content.get("tool_calls") or []
+
+            # Parse structured JSON from the response
+            parsed = None
+            if raw_text:
+                try:
+                    if "```json" in raw_text:
+                        json_str = raw_text.split("```json")[1].split("```")[0].strip()
+                    elif "```" in raw_text:
+                        json_str = raw_text.split("```")[1].split("```")[0].strip()
+                    else:
+                        start = raw_text.find("{")
+                        end = raw_text.rfind("}") + 1
+                        json_str = raw_text[start:end] if (start >= 0 and end > start) else raw_text
+
+                    parsed = json.loads(json_str)
+                except (json.JSONDecodeError, IndexError):
+                    pass
+
+            if not isinstance(parsed, dict):
+                parsed = {
+                    "summary": raw_text[:200] if raw_text else "Looking into options for the group.",
+                    "description": "",
+                    "intent": "trip",
+                    "needs_confirmation": False,
+                    "action_type": "booking_search" if api_tool_calls else "info_only",
+                    "tool_calls": [],
                 }
-                for tc in api_tool_calls
-            ]
 
-        return parsed
-    except Exception as e:
-        logger.error(f"AI call failed: {e}")
-        return {
-            "summary": "I'm having trouble connecting right now. Try again in a moment.",
-            "description": str(e)[:200],
-            "intent": "other",
-            "needs_confirmation": False,
-            "action_type": "rejected",
-            "tool_calls": [],
-            "error": str(e),
-            "error_type": type(e).__name__,
-        }
+            # Extract tool calls from response
+            if api_tool_calls and not parsed.get("tool_calls"):
+                parsed["tool_calls"] = [
+                    {
+                        "tool": tc["function"]["name"],
+                        "params": json.loads(tc["function"].get("arguments", "{}")),
+                    }
+                    for tc in api_tool_calls
+                    if "function" in tc
+                ]
+                if parsed.get("action_type") == "info_only":
+                    parsed["action_type"] = "booking_search"
+
+            return parsed
+        except Exception as e:
+            logger.warning(f"Error calling model {model_name}: {e}")
+            last_error = str(e)
+            continue
+
+    logger.error(f"All AI models failed. Last error: {last_error}")
+    return {
+        "summary": "I'm having trouble connecting right now. Please try again in a moment.",
+        "description": str(last_error)[:180] if last_error else "",
+        "intent": "other",
+        "needs_confirmation": False,
+        "action_type": "rejected",
+        "tool_calls": [],
+        "error": str(last_error),
+    }
 
 
 async def _execute_tool(tool_name: str, params: dict) -> dict:

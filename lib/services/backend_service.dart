@@ -11,6 +11,27 @@ class BackendService {
   final _base = ApiConfig.backendUrl;
   static const _timeout = Duration(seconds: 20);
 
+  // The backend runs on a free tier that cold-starts (~30-60s) after idle, and
+  // the agent/itinerary endpoints also wait on an LLM call. Give those a longer
+  // budget so the very first request after a cold start doesn't time out.
+  static const _longTimeout = Duration(seconds: 60);
+
+  bool _warmedUp = false;
+
+  /// Best-effort ping to wake a cold-started backend. Safe to call repeatedly;
+  /// only the first call does real work. Never throws.
+  Future<void> warmUp() async {
+    if (_warmedUp) return;
+    try {
+      final resp = await http
+          .get(Uri.parse('$_base/health'))
+          .timeout(_longTimeout);
+      if (resp.statusCode == 200) _warmedUp = true;
+    } catch (_) {
+      // Server still waking or unreachable — callers will retry on demand.
+    }
+  }
+
   /// Confirm a pending booking for a group.
   Future<Map<String, dynamic>> confirmBooking(String channelId) async {
     final resp = await http.post(
@@ -85,7 +106,7 @@ class BackendService {
         'command': command,
         'text': text,
       }),
-    ).timeout(const Duration(seconds: 20));
+    ).timeout(_longTimeout);
     if (resp.statusCode != 200) {
       throw Exception('Agent command failed: ${resp.statusCode} ${resp.body}');
     }
@@ -95,7 +116,7 @@ class BackendService {
   /// Fetch all polls for a channel.
   Future<Map<String, dynamic>> getPolls(String channelId) async {
     final resp = await http.get(
-      Uri.parse('$_base/polls/$channelId'),
+      Uri.parse('$_base/webhooks/polls/$channelId'),
     ).timeout(_timeout);
     if (resp.statusCode != 200) {
       throw Exception('Failed to fetch polls: ${resp.body}');
@@ -131,7 +152,7 @@ class BackendService {
       Uri.parse('$_base/webhooks/itinerary/generate'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({'channel_id': channelId, 'days': days}),
-    ).timeout(_timeout);
+    ).timeout(_longTimeout);
     if (resp.statusCode != 200) {
       throw Exception('Itinerary generation failed: ${resp.body}');
     }

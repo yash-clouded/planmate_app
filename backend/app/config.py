@@ -7,10 +7,10 @@ class Settings(BaseSettings):
     stream_api_secret: str = ""
     stream_api_base_url: str = "https://chat.stream-io-api.com/api/v1"
 
-    # NVIDIA NIM (Claude-compatible API)
+    # NVIDIA NIM (OpenAI-compatible API)
     nvidia_api_key: str = ""
     nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
-    nvidia_model: str = "deepseek-ai/deepseek-v4-flash-0731"
+    nvidia_model: str = "deepseek-ai/deepseek-v4.1-flash"
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"

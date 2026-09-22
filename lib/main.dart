@@ -29,14 +29,17 @@ import 'screens/account_screen.dart';
 import 'screens/help_support_screen.dart';
 import 'screens/about_screen.dart';
 
+/// Notifies screens when they become visible again after a pop (e.g. back from group chat).
+final RouteObserver<ModalRoute<void>> appRouteObserver = RouteObserver<ModalRoute<void>>();
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Initialize Firebase
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
-  // Initialize Stream Chat client
-  StreamChatService.instance.init();
+  // Initialize Stream Chat client with offline persistence
+  await StreamChatService.instance.init();
 
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
@@ -57,8 +60,9 @@ class PlanMateApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => PermissionService()),
       ],
       child: MaterialApp(
-        title: 'iternity',
+        title: 'PlanMate',
         debugShowCheckedModeBanner: false,
+        navigatorObservers: [appRouteObserver],
         theme: AppTheme.lightTheme,
         builder: (context, child) => StreamChat(
           client: StreamChatService.instance.client,
