@@ -1,3 +1,4 @@
+import 'package:firebase_auth/firebase_auth.dart' as fb;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -67,9 +68,8 @@ class PlanMateApp extends StatelessWidget {
           client: StreamChatService.instance.client,
           child: child!,
         ),
-        initialRoute: '/',
+        home: const _AuthGate(),
         routes: {
-          '/': (_) => const SplashOnboardingScreen(),
           '/auth/phone': (_) => const AuthPhoneScreen(),
           '/auth/profile': (_) => const AuthProfileScreen(),
           '/home': (_) => const ChatListScreen(),
@@ -88,6 +88,44 @@ class PlanMateApp extends StatelessWidget {
           '/settings/about': (_) => const AboutScreen(),
         },
       ),
+    );
+  }
+}
+
+/// Checks Firebase Auth state on launch. If already signed in, goes straight
+/// to home. Otherwise shows onboarding. Firebase Auth persists the session
+/// automatically across app restarts.
+class _AuthGate extends StatelessWidget {
+  const _AuthGate();
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<fb.User?>(
+      stream: fb.FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snapshot) {
+        // Still loading auth state — show a minimal loading screen.
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            backgroundColor: AppTheme.background,
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        // User is signed in — skip straight to home.
+        if (snapshot.hasData) {
+          // Use a post-frame callback to navigate so we don't build mid-frame.
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            Navigator.of(context).pushReplacementNamed('/home');
+          });
+          return const Scaffold(
+            backgroundColor: AppTheme.background,
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        // Not signed in — show onboarding.
+        return const SplashOnboardingScreen();
+      },
     );
   }
 }

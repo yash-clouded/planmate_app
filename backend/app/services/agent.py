@@ -8,6 +8,7 @@ payment link generation).
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -31,7 +32,12 @@ Output JSON only:
 }
 Rules:
 - Keep responses short, concise, and actionable.
-- If essential info is missing, ask 1 clear question.
+- IMPORTANT: The user message already contains what the user said. Use it directly.
+  If they said "eat first then go bowling in Koramangala", respond with something like
+  "Got it — food first, then bowling in Koramangala. Let me find options."
+- Only ask 1 clear question if essential info is genuinely missing (no location at all, no activity at all).
+- Do NOT ask users to repeat information they already provided.
+- Do NOT re-greet or restart the conversation. Continue from context.
 - For unrelated topics (politics, coding, personal), set action_type="rejected", summary="I only help with trip, hotel, restaurant, and event planning."
 """
 
@@ -137,17 +143,20 @@ async def process_mention(channel_id: str, mention_text: str) -> dict[str, Any]:
             "tool_calls": [],
         }
 
+    # Strip @agent/@planmate tags to get the clean user intent
+    clean_text = re.sub(r'@planmate\b|@agent\b', '', mention_text, flags=re.IGNORECASE).strip()
+
     # Detect direct commands
-    lower_text = mention_text.lower().strip()
+    lower_text = clean_text.lower().strip()
     if lower_text in ("poll", "create poll") or lower_text.startswith("poll "):
-        return await _handle_poll_command(channel_id, mention_text)
+        return await _handle_poll_command(channel_id, clean_text)
     elif lower_text in ("summarize", "summary") or lower_text.startswith("summarize "):
         return await _handle_summarize_command(channel_id)
     elif lower_text.startswith("restaurants ") or lower_text.startswith("restaurant "):
-        return await _handle_restaurants_command(channel_id, mention_text)
+        return await _handle_restaurants_command(channel_id, clean_text)
     
     # Default: process as general agent mention
-    return await _process_general_mention(channel_id, mention_text)
+    return await _process_general_mention(channel_id, clean_text)
 
 
 async def _check_rate_limit(channel_id: str) -> bool:
@@ -282,15 +291,26 @@ async def _handle_restaurants_command(channel_id: str, text: str) -> dict[str, A
 
 async def _process_general_mention(channel_id: str, mention_text: str) -> dict[str, Any]:
     """Process a general @agent mention with minimal token context."""
-    # 1. Fetch recent messages from Redis (last 6 messages to minimize token usage)
-    recent = await redis_store.get_recent_messages(channel_id, limit=6)
+    # 1. Fetch recent messages from Redis (last 10 messages for better context)
+    recent = await redis_store.get_recent_messages(channel_id, limit=10)
     context_lines = [
         f"{m.get('user_name', m.get('user_id', 'user'))}: {m['text']}"
-        for m in recent
+        for m in recent if m.get('text')
     ]
     context_str = "\n".join(context_lines)
 
-    user_message = f"Chat:\n{context_str}\n\nUser request: {mention_text}"
+    # The mention_text is already cleaned (no @agent tags) and represents
+    # the user's actual request. Build context so the LLM understands the
+    # full conversation and can respond to the specific request.
+    user_message = (
+        f"You are PlanMate, an AI trip & event planner for groups.\n"
+        f"Recent group chat:\n{context_str}\n\n"
+        f"User request: {mention_text}\n\n"
+        f"Respond directly to the user's request. If they gave clear details "
+        f"(location, activity, preferences), use them — do NOT ask for info "
+        f"they already provided. Only ask clarifying questions if something "
+        f"essential is truly missing."
+    )
 
     # 2. Call NVIDIA NIM API
     agent_reply = await _call_ai(user_message)
@@ -339,7 +359,7 @@ async def _call_ai(user_message: str) -> dict[str, Any]:
                 "tools": TOOLS,
                 "tool_choice": "auto",
                 "temperature": 0.2,
-                "max_tokens": 250,
+                "max_tokens": 1024,
             }
             logger.info(f"Calling NVIDIA API: model={model_name}")
             async with httpx.AsyncClient(timeout=15.0) as client:

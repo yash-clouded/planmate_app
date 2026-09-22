@@ -85,14 +85,21 @@ async def stream_webhook(
 
         # 2. Check for @agent mention
         text = msg.text or ""
+
+        # Skip bot messages (agent responses) — only process user messages
+        if msg.user_id == 'planmate-agent' or msg.user_id.startswith('planmate'):
+            return {"status": "ok"}
+
         if "@agent" in text.lower() or "@planmate" in text.lower():
             logger.info(f"@agent mentioned in {msg.cid}: {text[:80]}...")
 
             try:
+                logger.info(f"Processing @agent mention in {msg.cid}: {text[:100]}")
                 result = await process_mention(
                     channel_id=msg.cid,
                     mention_text=text,
                 )
+                logger.info(f"Agent result for {msg.cid}: action={result.get('action_type')}, summary={result.get('summary', '')[:80]}")
 
                 action_type = result.get("action_type", "info_only")
 

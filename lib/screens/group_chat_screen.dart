@@ -32,6 +32,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   StreamSubscription<Event>? _messageSubscription;
   bool _isStreamReady = false;
 
+  /// ID of the "Processing..." placeholder shown while waiting for @agent webhook response.
+  String? _agentProcessingId;
+
   /// The Stream channel cid the backend keys everything by, e.g. "messaging:goa-trip-abc".
   String get _channelCid => 'messaging:${_group!.channelId}';
 
@@ -172,11 +175,26 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       // Listen for new messages
       _messageSubscription = _streamChannel!.on('message.new').listen((event) {
         final message = event.message;
-        if (message == null || _seenMessageIds.contains(message.id)) return;
+        if (message == null) return;
+
+        // Skip our own messages — they are already rendered optimistically.
+        final currentUserId = StreamChatService.instance.client.state.currentUser?.id ?? '';
+        if (message.user?.id == currentUserId) return;
+
+        if (_seenMessageIds.contains(message.id)) return;
         _seenMessageIds.add(message.id);
         final chatMsg = _streamMessageToLocal(message);
         if (chatMsg != null && mounted) {
-          setState(() => _messages.add(chatMsg));
+          // If this is an agent response and we have a processing placeholder, remove it.
+          if (message.user?.id == 'planmate-agent' && _agentProcessingId != null) {
+            setState(() {
+              _removeMessageById(_agentProcessingId!);
+              _agentProcessingId = null;
+              _messages.add(chatMsg);
+            });
+          } else {
+            setState(() => _messages.add(chatMsg));
+          }
         }
       });
 
@@ -195,6 +213,44 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     if (text.isEmpty) return null;
 
     if (userId == 'planmate-agent') {
+      // Check for rich card data from the webhook (planmate_card custom field).
+      final cardData = message.extraData['planmate_card'] as Map<String, dynamic>?;
+      final cardType = cardData?['card_type'] as String?;
+
+      if (cardType == 'poll') {
+        final options = (cardData!['options'] as List<dynamic>?)?.cast<String>() ?? ['Yes', 'No'];
+        return _ChatMessage(
+          text: text,
+          type: _MsgType.agent,
+          time: _formatStreamTime(message.createdAt),
+          agentSummary: cardData['question']?.toString() ?? 'Group poll',
+          agentDescription: 'Vote now!',
+          agentActionType: 'poll',
+          agentToolResults: [{
+            'tool': 'create_poll',
+            'params': {
+              'question': cardData['question'] ?? 'Group poll',
+              'options': options,
+              'duration_minutes': cardData['duration_minutes'] ?? 60,
+            }
+          }],
+          isPoll: true,
+          pollId: cardData['poll_id']?.toString(),
+        );
+      }
+
+      if (cardType == 'agent_response') {
+        return _ChatMessage(
+          text: text,
+          type: _MsgType.agent,
+          time: _formatStreamTime(message.createdAt),
+          agentSummary: cardData!['summary']?.toString() ?? text,
+          agentDescription: cardData['description']?.toString() ?? '',
+          agentActionType: cardData['action_type']?.toString(),
+        );
+      }
+
+      // Plain agent text message.
       return _ChatMessage(
         text: text,
         type: _MsgType.agent,
@@ -223,9 +279,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   String _formatStreamTime(DateTime? dt) {
     if (dt == null) return _now();
-    final h = dt.hour == 0 ? 12 : (dt.hour > 12 ? dt.hour - 12 : dt.hour);
-    final minute = dt.minute.toString().padLeft(2, '0');
-    final ampm = dt.hour >= 12 ? 'PM' : 'AM';
+    // Convert UTC server time to local device time for consistent display.
+    final local = dt.isUtc ? dt.toLocal() : dt;
+    final h = local.hour == 0 ? 12 : (local.hour > 12 ? local.hour - 12 : local.hour);
+    final minute = local.minute.toString().padLeft(2, '0');
+    final ampm = local.hour >= 12 ? 'PM' : 'AM';
     return '$h:$minute $ampm';
   }
 
@@ -386,9 +444,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       command = 'itinerary';
     }
 
-    // Add user message to chat
+    // Add user message to chat with a temporary ID for dedup.
+    final tempId = 'temp-${DateTime.now().microsecondsSinceEpoch}';
     setState(() {
       _messages.add(_ChatMessage(
+        id: tempId,
         text: text,
         type: _MsgType.user,
         time: _now(),
@@ -396,13 +456,33 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     });
     _msgController.clear();
 
-    // Send to Stream channel (non-blocking). Record the returned message id so
-    // the echoed 'message.new' event doesn't render the message a second time.
+    // Send to Stream channel. Record the returned message id BEFORE sending
+    // so the 'message.new' listener cannot race and add a duplicate.
     if (_isStreamReady && _streamChannel != null) {
       try {
         final sent = await _streamChannel!.sendMessage(Message(text: text));
         final sentId = sent.message.id;
+        // Replace the temp id with the real Stream id for future lookups.
         _seenMessageIds.add(sentId);
+        // Update the local message's id so _removeMessageById etc. still work.
+        final idx = _messages.indexWhere((m) => m.id == tempId);
+        if (idx != -1) {
+          final old = _messages[idx];
+          _messages[idx] = _ChatMessage(
+            id: sentId,
+            text: old.text,
+            type: old.type,
+            time: old.time,
+            senderName: old.senderName,
+            agentSummary: old.agentSummary,
+            agentDescription: old.agentDescription,
+            agentActionType: old.agentActionType,
+            agentToolResults: old.agentToolResults,
+            isPoll: old.isPoll,
+            pollId: old.pollId,
+            itineraryData: old.itineraryData,
+          );
+        }
       } catch (e) {
         debugPrint('Stream send failed: $e');
       }
@@ -414,7 +494,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
     // Handle agent interaction
     final isAgentMention = lowerText.contains('@agent') || lowerText.contains('@planmate');
-    if (command != null || isAgentMention) {
+    if (isAgentMention) {
+      // @agent messages go through Stream → webhook → agent → Stream response.
+      // Do NOT call the direct command endpoint — it would create a duplicate.
+      // Show a local processing indicator until the webhook response arrives.
+      _lastAgentTime = now;
+      _showAgentProcessing(text);
+    } else if (command != null) {
       _lastAgentTime = now;
       _handleAgentResponse(text, command: command);
     }
@@ -526,6 +612,37 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     final m = now.minute.toString().padLeft(2, '0');
     final ampm = now.hour >= 12 ? 'PM' : 'AM';
     return '$h:$m $ampm';
+  }
+
+  /// Show a processing indicator for @agent mentions.
+  /// The placeholder is removed when the webhook response arrives via Stream.
+  void _showAgentProcessing(String userMessage) {
+    final placeholder = _ChatMessage(
+      text: '',
+      type: _MsgType.agent,
+      time: _now(),
+      agentSummary: 'Processing...',
+      agentDescription: 'Let me look into that for the group.',
+    );
+    _agentProcessingId = placeholder.id;
+    setState(() => _messages.add(placeholder));
+
+    // Auto-remove after 20s if webhook response never arrives (timeout safety).
+    Future.delayed(const Duration(seconds: 20), () {
+      if (_agentProcessingId != null && mounted) {
+        setState(() {
+          _removeMessageById(_agentProcessingId!);
+          _messages.add(_ChatMessage(
+            text: '',
+            type: _MsgType.agent,
+            time: _now(),
+            agentSummary: 'Agent couldn\'t respond',
+            agentDescription: 'The request timed out. Tap @PlanMate Agent to try again.',
+          ));
+          _agentProcessingId = null;
+        });
+      }
+    });
   }
 
   bool _isNetworkError(Object e) {
