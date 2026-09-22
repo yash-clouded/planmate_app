@@ -25,7 +25,13 @@ class _AuthProfileScreenState extends State<AuthProfileScreen> {
   @override
   void initState() {
     super.initState();
+    // Pre-fill name from Google profile if available
+    final user = FirebaseAuth.instance.currentUser;
+    if (user?.displayName != null && user!.displayName!.isNotEmpty) {
+      _nameController.text = user.displayName!;
+    }
     _nameController.addListener(_validate);
+    _validate();
   }
 
   void _validate() {
@@ -88,14 +94,22 @@ class _AuthProfileScreenState extends State<AuthProfileScreen> {
                       onPressed: _isValid ? () async {
                         final user = FirebaseAuth.instance.currentUser;
                         if (user != null) {
-                          final name = _nameController.text.trim();
-                          if (name.isNotEmpty) {
-                            await user.updateDisplayName(name);
+                          try {
+                            final name = _nameController.text.trim();
+                            if (name.isNotEmpty) {
+                              await user.updateDisplayName(name);
+                            }
+                            if (_uploadedImageUrl != null) {
+                              await user.updatePhotoURL(_uploadedImageUrl);
+                            }
+                            await user.reload();
+                          } catch (e) {
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Profile update failed: $e')),
+                              );
+                            }
                           }
-                          if (_uploadedImageUrl != null) {
-                            await user.updatePhotoURL(_uploadedImageUrl);
-                          }
-                          await user.reload();
                         }
                         if (mounted) {
                           Navigator.of(context).pushReplacementNamed('/home');
@@ -190,6 +204,9 @@ class _AuthProfileScreenState extends State<AuthProfileScreen> {
     }
   }
   Widget _buildAvatarPicker() {
+    final user = FirebaseAuth.instance.currentUser;
+    final googlePhoto = user?.photoURL;
+
     return Center(
       child: GestureDetector(
         onTap: _isUploading ? null : _pickAvatar,
@@ -215,11 +232,25 @@ class _AuthProfileScreenState extends State<AuthProfileScreen> {
                         fit: BoxFit.cover,
                       ),
                     )
-                  : const Icon(
-                      Icons.person,
-                      size: 50,
-                      color: AppTheme.primary,
-                    ),
+                  : googlePhoto != null && googlePhoto.isNotEmpty
+                      ? ClipOval(
+                          child: Image.network(
+                            googlePhoto,
+                            width: 110,
+                            height: 110,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => const Icon(
+                              Icons.person,
+                              size: 50,
+                              color: AppTheme.primary,
+                            ),
+                          ),
+                        )
+                      : const Icon(
+                          Icons.person,
+                          size: 50,
+                          color: AppTheme.primary,
+                        ),
             ),
             if (!_isUploading)
               Positioned(

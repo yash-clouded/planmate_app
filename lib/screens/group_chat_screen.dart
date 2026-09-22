@@ -223,10 +223,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   String _formatStreamTime(DateTime? dt) {
     if (dt == null) return _now();
-    final hour = dt.hour > 12 ? dt.hour - 12 : dt.hour;
+    final h = dt.hour == 0 ? 12 : (dt.hour > 12 ? dt.hour - 12 : dt.hour);
     final minute = dt.minute.toString().padLeft(2, '0');
     final ampm = dt.hour >= 12 ? 'PM' : 'AM';
-    return '$hour:$minute $ampm';
+    return '$h:$minute $ampm';
   }
 
   @override
@@ -476,15 +476,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         ));
       });
 
-      // Persist agent response to Stream so other members see it.
-      // Send as plain text (no @agent prefix) to avoid re-triggering the webhook.
-      if (_isStreamReady && _streamChannel != null && agentText.isNotEmpty) {
-        try {
-          await _streamChannel!.sendMessage(Message(text: agentText));
-        } catch (e) {
-          debugPrint('Stream agent send failed: $e');
-        }
-      }
+      // Note: we do NOT re-send the agent response to Stream here.
+      // The webhook path already sends it as the planmate-agent bot user
+      // via stream_service.send_agent_card / send_poll_card. Sending it
+      // again from the frontend would duplicate every agent reply.
     } catch (e) {
       setState(() {
         _removeMessageById(placeholderId);
@@ -527,7 +522,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   String _now() {
     final now = DateTime.now();
-    final h = now.hour > 12 ? now.hour - 12 : now.hour;
+    final h = now.hour == 0 ? 12 : (now.hour > 12 ? now.hour - 12 : now.hour);
     final m = now.minute.toString().padLeft(2, '0');
     final ampm = now.hour >= 12 ? 'PM' : 'AM';
     return '$h:$m $ampm';

@@ -111,7 +111,10 @@ class GroupData {
     final base = slug.isEmpty ? 'group' : slug;
     final suffix = DateTime.now().millisecondsSinceEpoch.toRadixString(36);
     final id = '$base-$suffix';
-    return id.length <= 64 ? id : id.substring(id.length - 64);
+    if (id.length <= 64) return id;
+    // Keep the slug prefix + as much of the suffix as fits.
+    final maxSuffix = 64 - base.length - 1; // -1 for the dash
+    return maxSuffix > 0 ? '$base-${suffix.substring(suffix.length - maxSuffix)}' : id.substring(0, 64);
   }
 }
 

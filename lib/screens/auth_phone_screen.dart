@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../theme/app_theme.dart';
@@ -12,328 +11,172 @@ class AuthPhoneScreen extends StatefulWidget {
 }
 
 class _AuthPhoneScreenState extends State<AuthPhoneScreen> {
-  final _phoneController = TextEditingController();
-  String _selectedCountryCode = '+91';
-  String _selectedCountryFlag = '🇮🇳';
-  bool _isValid = false;
   bool _isLoading = false;
-  Timer? _loadingTimeout;
 
-  final _countries = [
-    {'code': '+91', 'flag': '🇮🇳', 'name': 'India'},
-    {'code': '+1', 'flag': '🇺🇸', 'name': 'USA'},
-    {'code': '+44', 'flag': '🇬🇧', 'name': 'UK'},
-    {'code': '+61', 'flag': '🇦🇺', 'name': 'Australia'},
-  ];
-
-  @override
-  void initState() {
-    super.initState();
-    _phoneController.addListener(_validate);
-  }
-
-  void _validate() {
-    final digits = _phoneController.text.replaceAll(RegExp(r'\D'), '');
-    final valid = digits.length >= 8;
-    if (valid != _isValid) {
-      setState(() => _isValid = valid);
-    }
-  }
-
-  @override
-  void dispose() {
-    _loadingTimeout?.cancel();
-    _phoneController.dispose();
-    super.dispose();
-  }
-
-  /// Start the button spinner with a hard backstop so it can never hang forever.
-  ///
-  /// Firebase's instant-verification path (`verificationCompleted`) fires neither
-  /// `codeSent` nor an error, which would otherwise leave the spinner spinning
-  /// indefinitely. If that happens we either continue (if sign-in succeeded) or
-  /// surface a retry message.
-  void _startLoading() {
+  Future<void> _signInWithGoogle() async {
+    if (_isLoading) return;
     setState(() => _isLoading = true);
-    _loadingTimeout?.cancel();
-    _loadingTimeout = Timer(const Duration(seconds: 40), () {
-      if (!mounted || !_isLoading) return;
-      setState(() => _isLoading = false);
-      final auth = Provider.of<AuthService>(context, listen: false);
-      if (auth.isLoggedIn) {
-        Navigator.of(context).pushReplacementNamed('/auth/profile');
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('This is taking longer than expected. Please try again.'),
-            backgroundColor: Colors.orange,
-          ),
-        );
-      }
-    });
-  }
-
-  void _stopLoading() {
-    _loadingTimeout?.cancel();
-    if (mounted) setState(() => _isLoading = false);
-  }
-
-  Future<void> _sendOtp() async {
-    if (!_isValid || _isLoading) return;
-
-    final digits = _phoneController.text.replaceAll(RegExp(r'\D'), '');
-    final fullPhone = '$_selectedCountryCode$digits';
-
-    _startLoading();
 
     final authService = Provider.of<AuthService>(context, listen: false);
-    try {
-      await authService.sendOtp(
-        phoneNumber: fullPhone,
-        onCodeSent: (_) {
-          _stopLoading();
-          if (mounted) {
-            Navigator.of(context).pushNamed('/auth/otp', arguments: fullPhone);
-          }
-        },
-        onError: (error) {
-          _stopLoading();
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(error),
-                backgroundColor: Colors.red,
-              ),
-            );
-          }
-        },
-      );
-    } catch (e) {
-      _stopLoading();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to send OTP: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
+    await authService.signInWithGoogle(
+      onSuccess: (_) {
+        if (mounted) {
+          Navigator.of(context).pushReplacementNamed('/auth/profile');
+        }
+      },
+      onError: (error) {
+        if (mounted) {
+          setState(() => _isLoading = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(error),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      },
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppTheme.background,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, size: 20),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-      ),
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              minHeight: MediaQuery.of(context).size.height - MediaQuery.of(context).padding.top - kToolbarHeight,
-            ),
-            child: IntrinsicHeight(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const SizedBox(height: 20),
-                  const Text(
-                    'Enter your phone number',
-                    style: AppTheme.headlineLarge,
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    'We\'ll send you a verification code to confirm your identity.',
-                    style: AppTheme.bodyMedium.copyWith(
-                      color: AppTheme.textSecondary,
+        child: Column(
+          children: [
+            const Spacer(flex: 3),
+            // Logo
+            Column(
+              children: [
+                Container(
+                  width: 88,
+                  height: 88,
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [AppTheme.primary, AppTheme.primaryLight],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
                     ),
-                  ),
-                  const SizedBox(height: 40),
-                  _buildPhoneInput(),
-                  const SizedBox(height: 32),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 52,
-                    child: ElevatedButton(
-                      onPressed: _isLoading ? null : _sendOtp,
-                      style: AppTheme.primaryButtonStyle.copyWith(
-                        backgroundColor: WidgetStateProperty.resolveWith((states) {
-                          if (states.contains(WidgetState.disabled)) {
-                            return AppTheme.primary.withOpacity(0.4);
-                          }
-                          return AppTheme.primary;
-                        }),
-                        foregroundColor: WidgetStateProperty.all(Colors.white),
+                    borderRadius: BorderRadius.circular(24),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppTheme.primary.withOpacity(0.3),
+                        blurRadius: 20,
+                        offset: const Offset(0, 8),
                       ),
-                      child: _isLoading
-                          ? const SizedBox(
-                              width: 24,
-                              height: 24,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                              ),
-                            )
-                          : const Text('Send OTP'),
-                    ),
+                    ],
                   ),
-                  const SizedBox(height: 16),
-                  Center(
-                    child: TextButton(
-                      onPressed: _isLoading ? null : () {
-                        _startLoading();
-                        Provider.of<AuthService>(context, listen: false).signInWithDemo(
-                          onSuccess: (_) {
-                            _stopLoading();
-                            if (mounted) Navigator.of(context).pushReplacementNamed('/auth/profile');
-                          },
-                          onError: (err) {
-                            _stopLoading();
-                            if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
-                          },
-                        );
-                      },
-                      child: const Text('Test / Demo Login', style: TextStyle(color: AppTheme.primary, fontWeight: FontWeight.w600)),
-                    ),
+                  child: const Icon(
+                    Icons.smart_toy_rounded,
+                    size: 48,
+                    color: Colors.white,
                   ),
-                  const Spacer(),
-                  Center(
-                    child: Padding(
-                      padding: const EdgeInsets.only(bottom: 24),
-                      child: Text.rich(
-                        TextSpan(
-                          text: 'By continuing, you agree to our ',
-                          style: AppTheme.bodySmall,
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'PlanMate',
+                  style: TextStyle(
+                    fontSize: 32,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.primary,
+                    letterSpacing: -0.5,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Plan together. Decide faster. Travel smarter.',
+                  textAlign: TextAlign.center,
+                  style: AppTheme.bodyMedium.copyWith(
+                    color: AppTheme.textSecondary,
+                    fontSize: 15,
+                  ),
+                ),
+              ],
+            ),
+            const Spacer(flex: 4),
+            // Sign in button
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: SizedBox(
+                width: double.infinity,
+                height: 56,
+                child: ElevatedButton(
+                  onPressed: _isLoading ? null : _signInWithGoogle,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.white,
+                    foregroundColor: AppTheme.textPrimary,
+                    side: const BorderSide(color: AppTheme.border, width: 1.5),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    elevation: 0,
+                  ),
+                  child: _isLoading
+                      ? const SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.5,
+                            valueColor: AlwaysStoppedAnimation<Color>(AppTheme.primary),
+                          ),
+                        )
+                      : Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            TextSpan(
-                              text: 'Terms of Service',
-                              style: AppTheme.bodySmall.copyWith(
+                            Image.network(
+                              'https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg',
+                              width: 22,
+                              height: 22,
+                              errorBuilder: (_, __, ___) => const Icon(
+                                Icons.g_mobiledata,
+                                size: 28,
                                 color: AppTheme.primary,
-                                fontWeight: FontWeight.w600,
                               ),
                             ),
-                            const TextSpan(text: ' and '),
-                            TextSpan(
-                              text: 'Privacy Policy',
-                              style: AppTheme.bodySmall.copyWith(
-                                color: AppTheme.primary,
+                            const SizedBox(width: 12),
+                            const Text(
+                              'Continue with Google',
+                              style: TextStyle(
+                                fontSize: 16,
                                 fontWeight: FontWeight.w600,
                               ),
                             ),
                           ],
                         ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPhoneInput() {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppTheme.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.border),
-      ),
-      child: Row(
-        children: [
-          // Country code dropdown
-          InkWell(
-            onTap: _showCountryPicker,
-            borderRadius: const BorderRadius.horizontal(left: Radius.circular(14)),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
-              decoration: const BoxDecoration(
-                border: Border(
-                  right: BorderSide(color: AppTheme.borderLight),
                 ),
               ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(_selectedCountryFlag, style: const TextStyle(fontSize: 20)),
-                  const SizedBox(width: 6),
-                  Text(
-                    _selectedCountryCode,
-                    style: AppTheme.labelLarge.copyWith(color: AppTheme.textPrimary),
-                  ),
-                  const SizedBox(width: 4),
-                  const Icon(Icons.keyboard_arrow_down, size: 18, color: AppTheme.textHint),
-                ],
+            ),
+            const SizedBox(height: 16),
+            // Terms
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: Text.rich(
+                TextSpan(
+                  text: 'By continuing, you agree to our ',
+                  style: AppTheme.bodySmall,
+                  children: [
+                    TextSpan(
+                      text: 'Terms of Service',
+                      style: AppTheme.bodySmall.copyWith(
+                        color: AppTheme.primary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const TextSpan(text: ' and '),
+                    TextSpan(
+                      text: 'Privacy Policy',
+                      style: AppTheme.bodySmall.copyWith(
+                        color: AppTheme.primary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+                textAlign: TextAlign.center,
               ),
             ),
-          ),
-          // Phone input
-          Expanded(
-            child: TextField(
-              controller: _phoneController,
-              keyboardType: TextInputType.phone,
-              style: AppTheme.bodyLarge.copyWith(letterSpacing: 1.2),
-              decoration: const InputDecoration(
-                hintText: 'Phone number',
-                border: InputBorder.none,
-                contentPadding: EdgeInsets.symmetric(horizontal: 14, vertical: 16),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showCountryPicker() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (_) => Container(
-        decoration: const BoxDecoration(
-          color: AppTheme.surface,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              margin: const EdgeInsets.only(top: 12),
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: AppTheme.border,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const Padding(
-              padding: EdgeInsets.all(20),
-              child: Text('Select Country', style: AppTheme.titleLarge),
-            ),
-            ..._countries.map((c) => ListTile(
-                  leading: Text(c['flag']!, style: const TextStyle(fontSize: 24)),
-                  title: Text(c['name']!, style: AppTheme.bodyLarge),
-                  trailing: Text(c['code']!,
-                      style: AppTheme.labelLarge.copyWith(color: AppTheme.textSecondary)),
-                  onTap: () {
-                    setState(() {
-                      _selectedCountryCode = c['code']!;
-                      _selectedCountryFlag = c['flag']!;
-                    });
-                    Navigator.pop(context);
-                  },
-                )),
-            const SizedBox(height: 24),
+            SizedBox(height: MediaQuery.of(context).padding.bottom + 24),
           ],
         ),
       ),

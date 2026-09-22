@@ -77,7 +77,7 @@ async def stream_webhook(
             channel_id=msg.cid,
             message={
                 "user_id": msg.user_id,
-                "text": msg.text,
+                "text": msg.text or "",
                 "message_id": msg.message_id,
                 "created_at": msg.created_at,
             },

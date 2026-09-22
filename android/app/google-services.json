@@ -12,7 +12,20 @@
           "package_name": "com.planmate.planmate"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "468657114122-islqhml4dhe1gvjv3h594tn3cpgd3sbk.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.planmate.planmate",
+            "certificate_hash": "e296a986f3cd099d1bbeaee51fcb3cfdfc5489ed"
+          }
+        },
+        {
+          "client_id": "468657114122-f359ros8ndcu2jdc1f3daq5rak11ldib.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyBBpuEXeCI6TUdF2EMN8EPw0rAyptHcRbo"
@@ -20,7 +33,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "468657114122-f359ros8ndcu2jdc1f3daq5rak11ldib.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }

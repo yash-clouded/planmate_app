@@ -12,7 +12,6 @@ import 'services/permission_service.dart';
 // Screens
 import 'screens/splash_onboarding_screen.dart';
 import 'screens/auth_phone_screen.dart';
-import 'screens/auth_otp_screen.dart';
 import 'screens/auth_profile_screen.dart';
 import 'screens/chat_list_screen.dart';
 import 'screens/create_group_screen.dart';
@@ -72,7 +71,6 @@ class PlanMateApp extends StatelessWidget {
         routes: {
           '/': (_) => const SplashOnboardingScreen(),
           '/auth/phone': (_) => const AuthPhoneScreen(),
-          '/auth/otp': (_) => const AuthOtpScreen(),
           '/auth/profile': (_) => const AuthProfileScreen(),
           '/home': (_) => const ChatListScreen(),
           '/create-group': (_) => const CreateGroupScreen(),
